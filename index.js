@@ -15,6 +15,8 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+app.set("trust proxy", true);
+
 app.use(morgan("dev"));
 app.use(cors());
 app.use(express.json());
@@ -22,7 +24,12 @@ app.use(express.urlencoded({ extended: true }));
 app.use(express.static("public"));
 
 app.get("/", (req, res) => {
-  successResponse(res, null, "The service is healthy and running!");
+  const ipAddress = req.ip;
+  successResponse(
+    res,
+    { ipAddress: ipAddress },
+    "The service is healthy and running!"
+  );
 });
 
 app.use("/api", router);
