@@ -20,10 +20,6 @@ const contentSchema = new mongoose.Schema(
       required: true,
       // Markdown content
     },
-    like_cnt: {
-      type: Number,
-      default: 0,
-    },
     created_by: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
@@ -42,17 +38,18 @@ const contentSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
-    comments: [
-      {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'Comment',
-      },
-    ],
+    analytics: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Analytics',
+    },
   },
   {
     timestamps: true,
   }
 );
+
+contentSchema.index({ status: 1 }); // Optimize status queries
+contentSchema.index({ created_by: 1 }); // Optimize user content lookups
 
 const Content = mongoose.model('Content', contentSchema);
 
