@@ -1,4 +1,4 @@
-import { BadRequestError, ValidationError, InternalServerError } from "../lib/customErrors.js";
+import { BadRequestError, ValidationError, InternalServerError, NotFoundError } from "../lib/customErrors.js";
 import jwt from "jsonwebtoken";
 import bcrypt from "bcrypt";
 import { successResponse } from "../lib/responseUtils.js";
@@ -67,7 +67,7 @@ user.login = asyncErrorHandler(async (req, res) => {
     }
     const user = await User.findOne({ email });
     if (!user) {
-        throw new BadRequestError("User not found");
+        throw new NotFoundError("User not found");
     }
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
@@ -78,6 +78,56 @@ user.login = asyncErrorHandler(async (req, res) => {
     });
     return successResponse(res, { "token": token }, "Login successful", 200);
 });
+
+user.editUser = asyncErrorHandler(async (req, res) => {
+    if (!req.body) {
+        throw new BadRequestError("No data provided");
+    }
+    const { email, password, profile_img } = req.body;
+    if (!email && !password && !profile_img) {
+        throw new ValidationError("At least one field is required", []);
+    };
+    if (email) {
+        const user = await User.findOne({ email });
+        if (!user) {
+            throw new NotFoundError("User not found");
+        }
+        user.email = email;
+        await user.save();
+    }
+    else if (password) {
+        const user = await User.findOne({ email });
+        if (!user) {
+            throw new NotFoundError("User not found");
+        }
+        user.password = password;
+        await user.save();
+    } else {
+        const user = await User.findOne({ email });
+        if (!user) {
+            throw new NotFoundError("User not found");
+        }
+        user.profile_img = profile_img;
+        await user.save();
+    }
+    return successResponse(res, user, "User updated successfully", 200);
+
+});
+
+//Admin Only
+user.deleteUser = asyncErrorHandler(async (req, res) => {
+    if (!req.body) {
+        throw new BadRequestError("No data provided");
+    }
+    const { email } = req.body;
+    const user = await User.findOne({ email });
+    if (!user) {
+        throw new NotFoundError("User not found");
+    }
+    await user.deleteOne();
+    return successResponse(res, user, "User deleted successfully", 200);
+});
+
 
 
 
