@@ -9,6 +9,7 @@ import {
     InternalServerError,
 } from "../lib/customErrors.js";
 import { successResponse } from "../lib/responseUtils.js";
+import { getUserId } from "../lib/userIdExtractor.js";
 
 let cms = {};
 
@@ -112,7 +113,7 @@ cms.deleteContent = asyncErrorHandler(async (req, res) => {
 
 cms.addLikeOnContent = asyncErrorHandler(async (req, res) => {
     const { contentId, isAuth } = req.body;
-    const userId = isAuth ? req.user.id : null;
+    const userId = isAuth ? getUserId(req.headers.authorization) : null;
     if (isAuth && !userId) {
         throw new UnauthorizedError("You are not authorized to add like");
     }
@@ -189,7 +190,7 @@ cms.removeLikeOnContent = asyncErrorHandler(async (req, res) => {
 
 cms.addCommentOnContent = asyncErrorHandler(async (req, res) => {
     const { contentId, body, isAuth } = req.body;
-    const userId = isAuth ? req.user.id : null;
+    const userId = isAuth ? getUserId(req.headers.authorization) : null;
     if (isAuth && !userId) {
         throw new UnauthorizedError("You are not authorized to add comment");
     }
