@@ -6,7 +6,7 @@ const router = e.Router();
 
 
 
-const upload = multer({ dest: 'uploads/' }); // Temporary storage for uploads
+const upload = multer({ dest: '/tmp/' }); // Temporary storage for uploads
 
 router.get('/', cms.getAllContent);
 router.get('/:id', cms.getContentById);
