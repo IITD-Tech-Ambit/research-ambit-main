@@ -10,6 +10,7 @@ import {
 } from "../lib/customErrors.js";
 import { successResponse } from "../lib/responseUtils.js";
 import { getUserId } from "../lib/userIdExtractor.js";
+import { uploadToCloudinary, deleteFromCloudinary } from "../lib/cloudinary.js";
 
 let cms = {};
 
@@ -21,11 +22,32 @@ cms.getAllContent = asyncErrorHandler(async (req, res) => {
     return successResponse(res, content, "Content fetched successfully", 200);
 });
 
+cms.getContentById = asyncErrorHandler(async (req, res) => {
+    const { id } = req.params;
+    const content = await Content.findById(id);
+    if (!content) {
+        throw new NotFoundError("Content not found");
+    }
+    return successResponse(res, content, "Content fetched successfully", 200);
+});
+
+
 cms.addContent = asyncErrorHandler(async (req, res) => {
+    // If we have a file, upload it to Cloudinary
+    let hero_img = "";
+    if (req.file) {
+        const uploadedUrl = await uploadToCloudinary(req.file.path, 'posts');
+        if (uploadedUrl) {
+            hero_img = uploadedUrl;
+        } else {
+            throw new InternalServerError("Failed to upload image");
+        }
+    }
+
     if (!req.body) {
         throw new BadRequestError("No data provided");
     }
-    const { title, subtitle, hero_img, body, est_read_time } = req.body;
+    const { title, subtitle, body, est_read_time } = req.body;
     const errors = [];
     if (!title) errors.push({ field: "title", message: "Title is required" });
     if (!subtitle)
@@ -46,7 +68,7 @@ cms.addContent = asyncErrorHandler(async (req, res) => {
     const content = await Content.create({
         title,
         subtitle,
-        hero_img,
+        image_url: hero_img,
         body,
         est_read_time,
         created_by: req.user.id,
@@ -62,12 +84,15 @@ cms.addContent = asyncErrorHandler(async (req, res) => {
     return successResponse(res, content, "Content created successfully", 201);
 });
 
+
 cms.editContent = asyncErrorHandler(async (req, res) => {
     if (!req.body) {
         throw new BadRequestError("No data provided");
     }
-    const { id, title, subtitle, hero_img, body, est_read_time } = req.body;
+
+    const { id, title, subtitle, body, est_read_time } = req.body;
     const content = await Content.findById(id);
+
     if (!content) {
         throw new NotFoundError("Content not found");
     }
@@ -77,9 +102,24 @@ cms.editContent = asyncErrorHandler(async (req, res) => {
     ) {
         throw new UnauthorizedError("You are not authorized to edit this content");
     }
+
+    let hero_img = "";
+    if (req.file) {
+        const uploadedUrl = await uploadToCloudinary(req.file.path, 'posts');
+        if (uploadedUrl) {
+            hero_img = uploadedUrl; // Update existing image
+            // Delete the old image from Cloudinary if it exists
+            if (content.image_url) {
+                await deleteFromCloudinary(content.image_url);
+            }
+        } else {
+            throw new InternalServerError("Failed to upload image");
+        }
+    }
+
     content.title = title || content.title;
     content.subtitle = subtitle || content.subtitle;
-    content.hero_img = hero_img || content.hero_img;
+    content.image_url = hero_img || content.image_url;
     content.body = body || content.body;
     content.est_read_time = est_read_time || content.est_read_time;
     await content.save();
@@ -103,6 +143,12 @@ cms.deleteContent = asyncErrorHandler(async (req, res) => {
             "You are not authorized to delete this content"
         );
     }
+
+    // Delete image from Cloudinary if it exists
+    if (content.image_url) {
+        await deleteFromCloudinary(content.image_url);
+    }
+
     await content.deleteOne(); // remove() is deprecated
     // Also delete associated analytics
     await Analytics.findOneAndDelete({ content: id });

@@ -10,7 +10,7 @@ import { successResponse } from "./src/lib/responseUtils.js";
 import db from "./src/lib/db.js";
 import router from "./src/routes/index.js";
 
-dotenv.config();
+dotenv.config({ quiet: true });
 
 const app = express();
 const PORT = process.env.PORT || 3000;

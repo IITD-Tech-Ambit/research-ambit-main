@@ -1,13 +1,16 @@
 import e from "express";
 import cms from "../controllers/cms.js";
 import authMiddleware from "../middleware/authHandler.js";
+import multer from 'multer';
 const router = e.Router();
 
 
 
+const upload = multer({ dest: 'uploads/' }); // Temporary storage for uploads
+
 router.get('/', cms.getAllContent);
-router.post('/', authMiddleware("admin", "user"), cms.addContent);
-router.put('/', authMiddleware("admin", "user"), cms.editContent);
+router.post('/', authMiddleware("admin", "user"), upload.single('hero_img'), cms.addContent);
+router.put('/', authMiddleware("admin", "user"), upload.single('hero_img'), cms.editContent);
 router.delete('/', authMiddleware("admin", "user"), cms.deleteContent);
 router.post('/like', cms.addLikeOnContent);
 router.post('/dislike', cms.removeLikeOnContent);
