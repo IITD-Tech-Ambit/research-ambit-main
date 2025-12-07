@@ -17,6 +17,7 @@ router.post('/like', cms.addLikeOnContent);
 router.post('/dislike', cms.removeLikeOnContent);
 router.post('/comment', cms.addCommentOnContent);
 router.post('/uncomment', cms.deleteCommentOnContent);
+router.post('/status', authMiddleware("admin", "user"), cms.changeStatus);
 
 
 

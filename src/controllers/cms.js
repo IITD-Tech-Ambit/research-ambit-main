@@ -345,4 +345,40 @@ cms.deleteCommentOnContent = asyncErrorHandler(async (req, res) => {
     return successResponse(res, null, "Comment deleted successfully", 200);
 });
 
+
+//Admin apis..
+cms.changeStatus = asyncErrorHandler(async (req, res) => {
+    if (!req.body) {
+        throw new BadRequestError("Body is required");
+    }
+    const { contentId, status } = req.body;
+    const errors = [];
+    if (!contentId) {
+        errors.push("Content ID is required");
+    }
+    if (!status) {
+        errors.push("Status is required");
+    }
+    if (errors.length > 0) {
+        throw new ValidationError("Validation Error", errors);
+    }
+    if (status != "pending" && status != "archived" && status != "online") {
+        throw new BadRequestError("Invalid status");
+    }
+    const content = await Content.findById(contentId);
+    if (!content) throw new NotFoundError("Content not found");
+    if (status === 'online') {
+        if (req.user.role !== 'admin') {
+            throw new UnauthorizedError("Not authorized to publish content");
+        }
+    } else {
+        if (req.user.role !== 'admin' && content.created_by.toString() !== req.user.id) {
+            throw new UnauthorizedError("Not authorized to change status");
+        }
+    }
+    content.status = status;
+    await content.save();
+    return successResponse(res, content, "Status changed successfully", 200);
+});
+
 export default cms;
