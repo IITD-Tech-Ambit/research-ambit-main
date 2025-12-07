@@ -37,16 +37,17 @@ app.use("/api", router);
 app.use(notFoundHandler);
 app.use(globalErrorHandler);
 
-db()
-  .then(() => {
-    app.listen(PORT, () => {
-      console.log(`Server is running on http://localhost:${PORT}`);
-    });
-  })
-  .catch((err) => {
-    console.error("Failed to connect to the database", err);
-    process.exit(1);
+// Connect to database
+db();
+
+// Only listen if not running in Vercel (Vercel handles the port binding)
+if (process.env.NODE_ENV !== "production") {
+  app.listen(PORT, () => {
+    console.log(`Server is running on http://localhost:${PORT}`);
   });
+}
+
+export default app;
 
 process.on("SIGINT", async () => {
   console.log("Shutting down gracefully...");
