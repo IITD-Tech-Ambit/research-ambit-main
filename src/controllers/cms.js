@@ -1,5 +1,6 @@
 import Content from "../models/contents.js";
 import Analytics from "../models/analytics.js";
+import User from "../models/user.js";
 import { asyncErrorHandler } from "../middleware/errorHandler.js";
 import {
     BadRequestError,
@@ -158,10 +159,13 @@ cms.deleteContent = asyncErrorHandler(async (req, res) => {
 // Analytics: Likes & Comments
 
 cms.addLikeOnContent = asyncErrorHandler(async (req, res) => {
-    const { contentId, isAuth } = req.body;
-    const userId = isAuth ? getUserId(req.headers.authorization) : null;
-    if (isAuth && !userId) {
-        throw new UnauthorizedError("You are not authorized to add like");
+    const { contentId } = req.body;
+    let userId = null;
+    if (req.headers.authorization) {
+        userId = getUserId(req.headers.authorization);
+        if (!userId) {
+            throw new UnauthorizedError("You are not authorized to add like");
+        }
     }
     const ipAddress = req.ip;
 
@@ -201,7 +205,13 @@ cms.addLikeOnContent = asyncErrorHandler(async (req, res) => {
 
 cms.removeLikeOnContent = asyncErrorHandler(async (req, res) => {
     const { contentId } = req.body;
-    const userId = req.user ? req.user.id : null;
+    let userId = null;
+    if (req.headers.authorization) {
+        userId = getUserId(req.headers.authorization);
+        if (!userId) {
+            throw new UnauthorizedError("You are not authorized to remove like");
+        }
+    }
     const ipAddress = req.ip;
 
     if (!contentId) {
@@ -235,10 +245,13 @@ cms.removeLikeOnContent = asyncErrorHandler(async (req, res) => {
 });
 
 cms.addCommentOnContent = asyncErrorHandler(async (req, res) => {
-    const { contentId, body, isAuth } = req.body;
-    const userId = isAuth ? getUserId(req.headers.authorization) : null;
-    if (isAuth && !userId) {
-        throw new UnauthorizedError("You are not authorized to add comment");
+    const { contentId, body } = req.body;
+    let userId = null;
+    if (req.headers.authorization) {
+        userId = getUserId(req.headers.authorization);
+        if (!userId) {
+            throw new UnauthorizedError("You are not authorized to add comment");
+        }
     }
     const ipAddress = req.ip;
 
@@ -288,7 +301,19 @@ cms.addCommentOnContent = asyncErrorHandler(async (req, res) => {
 
 cms.deleteCommentOnContent = asyncErrorHandler(async (req, res) => {
     const { contentId, commentId } = req.body;
-    const userId = req.user ? req.user.id : null;
+    let userId = null;
+    let userRole = null;
+
+    if (req.headers.authorization) {
+        userId = getUserId(req.headers.authorization);
+        if (userId) {
+            const user = await User.findById(userId);
+            if (user) {
+                userRole = user.role;
+            }
+        }
+    }
+    const ipAddress = req.ip;
 
     if (!contentId || !commentId) {
         throw new BadRequestError("Content ID and Comment ID are required");
@@ -300,11 +325,14 @@ cms.deleteCommentOnContent = asyncErrorHandler(async (req, res) => {
     const comment = analytics.comments.id(commentId);
     if (!comment) throw new NotFoundError("Comment not found");
 
-    const isAdmin = req.user && req.user.role === "admin";
+    const isAdmin = userRole === "admin";
+
+    // Creator check:
+    // 1. Authenticated: comment.created_by matches userId
+    // 2. Anonymous: comment.created_by is null AND comment.ip_address matches req.ip (AND userId is null)
     const isCreator =
-        userId &&
-        comment.created_by &&
-        comment.created_by.toString() === userId;
+        (userId && comment.created_by && comment.created_by.toString() === userId) ||
+        (!userId && !comment.created_by && comment.ip_address === ipAddress);
 
     // Authorization: Admin or Comment Creator
     if (!isAdmin && !isCreator) {

@@ -4,6 +4,7 @@ import bcrypt from "bcrypt";
 import { successResponse } from "../lib/responseUtils.js";
 import { asyncErrorHandler } from "../middleware/errorHandler.js";
 import User from "../models/user.js";
+import { uploadToCloudinary, deleteFromCloudinary } from "../lib/cloudinary.js";
 
 let user = {};
 
@@ -12,7 +13,17 @@ user.register = asyncErrorHandler(async (req, res) => {
     if (!req.body) {
         throw new BadRequestError("No data provided");
     }
-    let { email, password, profile_img, role } = req.body;
+    let { email, password, role } = req.body;
+    let profile_img = req.body.profile_img || "";
+
+    if (req.file) {
+        const uploadedUrl = await uploadToCloudinary(req.file.path, 'users');
+        if (uploadedUrl) {
+            profile_img = uploadedUrl;
+        } else {
+            throw new InternalServerError("Failed to upload image");
+        }
+    }
     const errors = [];
     if (!email) {
         errors.push({
@@ -24,12 +35,6 @@ user.register = asyncErrorHandler(async (req, res) => {
         errors.push({
             field: 'password',
             message: 'Password is required'
-        })
-    }
-    if (!role) {
-        errors.push({
-            field: 'role',
-            message: 'Role is required'
         })
     }
     if (errors.length > 0) {
@@ -83,33 +88,40 @@ user.editUser = asyncErrorHandler(async (req, res) => {
     if (!req.body) {
         throw new BadRequestError("No data provided");
     }
-    const { email, password, profile_img } = req.body;
-    if (!email && !password && !profile_img) {
+    const { password } = req.body;
+    let profile_img = req.body.profile_img || "";
+
+    if (req.file) {
+        const uploadedUrl = await uploadToCloudinary(req.file.path, 'users');
+        if (uploadedUrl) {
+            profile_img = uploadedUrl;
+        } else {
+            throw new InternalServerError("Failed to upload image");
+        }
+    }
+
+    if (!password && !profile_img) {
         throw new ValidationError("At least one field is required", []);
     };
-    if (email) {
-        const user = await User.findOne({ email });
-        if (!user) {
-            throw new NotFoundError("User not found");
-        }
-        user.email = email;
-        await user.save();
+
+    const user = await User.findOne({ email: req.user.email });
+    if (!user) {
+        throw new NotFoundError("User not found");
     }
-    else if (password) {
-        const user = await User.findOne({ email });
-        if (!user) {
-            throw new NotFoundError("User not found");
-        }
-        user.password = password;
-        await user.save();
-    } else {
-        const user = await User.findOne({ email });
-        if (!user) {
-            throw new NotFoundError("User not found");
+
+    if (password) {
+        const hashedPassword = await bcrypt.hash(password, 10);
+        user.password = hashedPassword;
+    }
+
+    if (profile_img) {
+        if (user.profile_img) {
+            await deleteFromCloudinary(user.profile_img);
         }
         user.profile_img = profile_img;
-        await user.save();
     }
+
+    await user.save();
     return successResponse(res, user, "User updated successfully", 200);
 
 });
@@ -123,6 +135,9 @@ user.deleteUser = asyncErrorHandler(async (req, res) => {
     const user = await User.findOne({ email });
     if (!user) {
         throw new NotFoundError("User not found");
+    }
+    if (user.profile_img) {
+        await deleteFromCloudinary(user.profile_img);
     }
     await user.deleteOne();
     return successResponse(res, user, "User deleted successfully", 200);

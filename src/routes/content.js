@@ -9,6 +9,7 @@ const router = e.Router();
 const upload = multer({ dest: 'uploads/' }); // Temporary storage for uploads
 
 router.get('/', cms.getAllContent);
+router.get('/:id', cms.getContentById);
 router.post('/', authMiddleware("admin", "user"), upload.single('hero_img'), cms.addContent);
 router.put('/', authMiddleware("admin", "user"), upload.single('hero_img'), cms.editContent);
 router.delete('/', authMiddleware("admin", "user"), cms.deleteContent);
