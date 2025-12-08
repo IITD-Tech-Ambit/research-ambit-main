@@ -13,7 +13,7 @@ user.register = asyncErrorHandler(async (req, res) => {
     if (!req.body) {
         throw new BadRequestError("No data provided");
     }
-    let { email, password, role } = req.body;
+    let { name, email, password, role } = req.body;
     let profile_img = req.body.profile_img || "";
 
     if (req.file) {
@@ -25,6 +25,12 @@ user.register = asyncErrorHandler(async (req, res) => {
         }
     }
     const errors = [];
+    if (!name) {
+        errors.push({
+            field: 'name',
+            message: 'Name is required'
+        })
+    }
     if (!email) {
         errors.push({
             field: 'email',
@@ -42,7 +48,7 @@ user.register = asyncErrorHandler(async (req, res) => {
     }
     const hashedPassword = await bcrypt.hash(password, 10);
     password = hashedPassword;
-    const user = await User.create({ email, password, profile_img, role });
+    const user = await User.create({ name, email, password, profile_img, role });
     if (!user) {
         throw new InternalServerError("Failed to create user");
     }
@@ -88,7 +94,7 @@ user.editUser = asyncErrorHandler(async (req, res) => {
     if (!req.body) {
         throw new BadRequestError("No data provided");
     }
-    const { password } = req.body;
+    const { name, password } = req.body;
     let profile_img = req.body.profile_img || "";
 
     if (req.file) {
@@ -100,7 +106,7 @@ user.editUser = asyncErrorHandler(async (req, res) => {
         }
     }
 
-    if (!password && !profile_img) {
+    if (!name && !password && !profile_img) {
         throw new ValidationError("At least one field is required", []);
     };
 
@@ -109,6 +115,9 @@ user.editUser = asyncErrorHandler(async (req, res) => {
         throw new NotFoundError("User not found");
     }
 
+    if (name) {
+        user.name = name;
+    }
     if (password) {
         const hashedPassword = await bcrypt.hash(password, 10);
         user.password = hashedPassword;
