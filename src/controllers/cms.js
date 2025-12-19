@@ -23,6 +23,44 @@ cms.getAllContent = asyncErrorHandler(async (req, res) => {
     return successResponse(res, content, "Content fetched successfully", 200);
 });
 
+// NEW: Get paginated content with server-side pagination
+cms.getPaginatedContent = asyncErrorHandler(async (req, res) => {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 9;
+    const status = req.query.status; // optional: 'online', 'pending', 'archived'
+    
+    // Build query filter
+    const filter = {};
+    if (status) {
+        filter.status = status;
+    }
+    
+    // Calculate skip value
+    const skip = (page - 1) * limit;
+    
+    // Get total count
+    const totalCount = await Content.countDocuments(filter);
+    const totalPages = Math.ceil(totalCount / limit);
+    
+    // Fetch paginated content
+    const content = await Content.find(filter)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit);
+    
+    return successResponse(res, {
+        magazines: content,
+        pagination: {
+            currentPage: page,
+            totalPages,
+            totalCount,
+            limit,
+            hasNextPage: page < totalPages,
+            hasPrevPage: page > 1
+        }
+    }, "Content fetched successfully", 200);
+});
+
 cms.getContentById = asyncErrorHandler(async (req, res) => {
     const { id } = req.params;
     const content = await Content.findById(id);
