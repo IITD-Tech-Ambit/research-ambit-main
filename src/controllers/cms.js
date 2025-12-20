@@ -23,31 +23,30 @@ cms.getAllContent = asyncErrorHandler(async (req, res) => {
     return successResponse(res, content, "Content fetched successfully", 200);
 });
 
-// NEW: Get paginated content with server-side pagination
 cms.getPaginatedContent = asyncErrorHandler(async (req, res) => {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 9;
     const status = req.query.status; // optional: 'online', 'pending', 'archived'
-    
+
     // Build query filter
     const filter = {};
     if (status) {
         filter.status = status;
     }
-    
+
     // Calculate skip value
     const skip = (page - 1) * limit;
-    
+
     // Get total count
     const totalCount = await Content.countDocuments(filter);
     const totalPages = Math.ceil(totalCount / limit);
-    
+
     // Fetch paginated content
     const content = await Content.find(filter)
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit);
-    
+
     return successResponse(res, {
         magazines: content,
         pagination: {
@@ -63,16 +62,23 @@ cms.getPaginatedContent = asyncErrorHandler(async (req, res) => {
 
 cms.getContentById = asyncErrorHandler(async (req, res) => {
     const { id } = req.params;
-    const content = await Content.findById(id);
+    const content = await Content.findById(id).populate("created_by", "name");
     if (!content) {
         throw new NotFoundError("Content not found");
     }
-    return successResponse(res, content, "Content fetched successfully", 200);
+    const analytics = await Analytics.findOne({ content: id });
+    const responseData = {
+        ...content.toObject(),
+        comments: analytics?.comments || [],
+        likesCount: analytics?.likes?.length || 0,
+        commentsCount: analytics?.comments?.length || 0
+    };
+
+    return successResponse(res, responseData, "Content fetched successfully", 200);
 });
 
 
 cms.addContent = asyncErrorHandler(async (req, res) => {
-    // If we have a file, upload it to Cloudinary
     let hero_img = "";
     if (req.file) {
         const uploadedUrl = await uploadToCloudinary(req.file.path, 'posts');
@@ -220,11 +226,17 @@ cms.addLikeOnContent = asyncErrorHandler(async (req, res) => {
         if (existingLike) {
             throw new BadRequestError("You have already liked this content");
         }
+    } else {
+        // Check if anonymous user (by IP) already liked
+        const existingLike = await Analytics.findOne({
+            content: contentId,
+            "likes.ip_address": ipAddress,
+            "likes.user": null,
+        });
+        if (existingLike) {
+            throw new BadRequestError("You have already liked this content");
+        }
     }
-
-    // Upsert ensures we create the analytics doc if it doesn't exist
-    // $addToSet ensures unique likes per unique object.
-    // Explicitly setting user: null for anon ensures distinct structure from auth likes.
     const query = { content: contentId };
     const likeObj = { ip_address: ipAddress, user: userId || null };
 
@@ -384,7 +396,7 @@ cms.deleteCommentOnContent = asyncErrorHandler(async (req, res) => {
 });
 
 
-//Admin apis..
+// ADMIN: Admin apis..
 cms.changeStatus = asyncErrorHandler(async (req, res) => {
     if (!req.body) {
         throw new BadRequestError("Body is required");
