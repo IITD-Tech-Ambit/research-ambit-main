@@ -1,35 +1,79 @@
 import mongoose from "mongoose";
 
 
-const PhdThesisSchema = new mongoose.Schema({
 
-    department: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: "Department",
+const PhdThesisSchema = new mongoose.Schema({
+    document_id: {
+        type: String,
+        required: true,
+        unique: true,
+        index: true
+    },
+    link: {
+        type: String,
+    },
+    publication_year: {
+        type: Number,
+        index: true
+    },
+    document_type: {
+        type: String,
+        required: true,
+        index: true
+    },
+    title: {
+        type: String,
         required: true
     },
-    dc_contributor_advisor: { type: [String] },
-    dc_contributor_author: { type: [String] },
-    dc_date_accessioned: { type: Date },
-    dc_date_created: { type: Date },
-    dc_date_issued: { type: Date },
-    dc_description_provenance_en: { type: String },
-    dc_identifier_citation: { type: String },
-    dc_identifier_uri: { type: String },
-    dc_language_iso: { type: String },
-    dc_publisher: { type: String },
-    dc_relation_ispartofseries: { type: String },
-    dc_subject: { type: [String] },
-    dc_title: { type: String },
-    dc_type: { type: String },
-    open_search_id: { type: String, required: true, unique: true },
+    abstract: {
+        type: String,
+    },
+    field_associated: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Department"
+    },
+
+    department_code: {
+        type: String,
+        index: true
+    },
+    department_name: {
+        type: String,
+    },
+    subject_area: [{
+        type: String,
+    }],
+    contributor: {
+        author: {
+            type: String,
+            required: true
+        },
+        advisor: {
+            name: {
+                type: String,
+            },
+            matched_profile: {
+                type: mongoose.Schema.Types.ObjectId,
+                ref: "Faculty"
+            }
+        }
+    },
+    open_search_id: {
+        type: String,
+        required: true,
+        unique: true,
+        index: true
+    },
 });
-// Indexes
-PhdThesisSchema.index({ department: 1, dc_date_issued: -1 });
-PhdThesisSchema.index({ dc_contributor_author: 1 });
-PhdThesisSchema.index({ dc_contributor_advisor: 1 });
-PhdThesisSchema.index({ dc_subject: 1 });
-PhdThesisSchema.index({ dc_title: "text" });
+
+// Compound and additional indexes
+PhdThesisSchema.index({ "author.contributor": 1 });
+PhdThesisSchema.index({ "author.advisor.name": 1 });
+PhdThesisSchema.index({ "author.advisor.matched_profile": 1 });
+PhdThesisSchema.index({ subject_area: 1 });
+PhdThesisSchema.index({ title: "text" }); // Text index for full-text search
+PhdThesisSchema.index({ publication_year: -1, document_type: 1 }); // Compound index for common queries
+
 
 
 export default mongoose.model("PhdThesis", PhdThesisSchema);
