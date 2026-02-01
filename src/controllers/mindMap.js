@@ -437,3 +437,46 @@ export const getOpenPath = async (req, res) => {
     });
   }
 };
+
+// ==================== Temporary Endpoint: Get Full Research Document ====================
+export const getResearchTemporary = async (req, res) => {
+  try {
+    const { _id } = req.body;
+    
+    if (!_id) {
+      return res.status(400).json({
+        success: false,
+        error: 'Research document _id is required in request body'
+      });
+    }
+    
+    // Validate ObjectId
+    if (!mongoose.Types.ObjectId.isValid(_id)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid research document ID'
+      });
+    }
+    
+    // Get full research document from researchmetadatacorpus collection
+    const research = await ResearchMetadata.findById(_id);
+    
+    if (!research) {
+      return res.status(404).json({
+        success: false,
+        error: 'Research document not found'
+      });
+    }
+    
+    res.json({
+      success: true,
+      data: research
+    });
+  } catch (error) {
+    console.error('Error fetching research document:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch research document'
+    });
+  }
+};

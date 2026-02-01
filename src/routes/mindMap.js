@@ -10,7 +10,8 @@ import {
   getPhdThesisById,
   getResearchByFaculty,
   getResearchById,
-  getOpenPath
+  getOpenPath,
+  getResearchTemporary
 } from '../controllers/mindMap.js';
 
 const router = express.Router();
@@ -39,5 +40,8 @@ router.get('/research/card/:researchId', getResearchById);
 
 // ==================== Open Path API ====================
 router.post('/open-path', getOpenPath);
+
+// ==================== Temporary: Get Full Research Document ====================
+router.post('/research/temporary', getResearchTemporary);
 
 export default router;
