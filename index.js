@@ -13,15 +13,17 @@ import router from "./src/routes/index.js";
 dotenv.config({ quiet: true });
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3002;
 
 app.set("trust proxy", true);
 
 app.use(morgan("dev"));
+
 app.use(cors());
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: "50mb" }));
+app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 app.use(express.static("public"));
+
 
 app.get("/", (req, res) => {
   const ipAddress = req.ip;
