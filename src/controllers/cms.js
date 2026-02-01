@@ -27,11 +27,20 @@ cms.getPaginatedContent = asyncErrorHandler(async (req, res) => {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 9;
     const status = req.query.status; // optional: 'online', 'pending', 'archived'
+    const mine = req.query.mine === 'true'; // Filter by current user's content
 
     // Build query filter
     const filter = {};
     if (status) {
         filter.status = status;
+    }
+
+    // If 'mine' is true, filter by the authenticated user's ID
+    if (mine && req.headers.authorization) {
+        const userId = getUserId(req.headers.authorization);
+        if (userId) {
+            filter.created_by = userId;
+        }
     }
 
     // Calculate skip value
@@ -43,6 +52,7 @@ cms.getPaginatedContent = asyncErrorHandler(async (req, res) => {
 
     // Fetch paginated content
     const content = await Content.find(filter)
+        .populate("created_by", "name")
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit);
