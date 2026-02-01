@@ -9,7 +9,8 @@ import {
   getPhdThesesByFaculty,
   getPhdThesisById,
   getResearchByFaculty,
-  getResearchById
+  getResearchById,
+  getOpenPath
 } from '../controllers/mindMap.js';
 
 const router = express.Router();
@@ -35,5 +36,8 @@ router.get('/phd-thesis/card/:thesisId', getPhdThesisById);
 // ==================== Layer 6b: Research Papers ====================
 router.get('/research/:facultyId', getResearchByFaculty);
 router.get('/research/card/:researchId', getResearchById);
+
+// ==================== Open Path API ====================
+router.post('/open-path', getOpenPath);
 
 export default router;

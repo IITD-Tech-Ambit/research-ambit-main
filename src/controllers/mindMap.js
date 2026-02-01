@@ -315,3 +315,125 @@ export const getResearchById = async (req, res) => {
     });
   }
 };
+
+// ==================== Open Path API ====================
+
+// Get mind map path for a given document
+export const getOpenPath = async (req, res) => {
+  try {
+    const documentData = req.body;
+    
+    if (!documentData || Object.keys(documentData).length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Document data is required in request body'
+      });
+    }
+    
+    // Determine project type based on document_eid field
+    const projectType = documentData.document_eid ? 'Research' : 'PHD Thesis';
+    
+    // Get faculty_id based on project type
+    let facultyId = null;
+    
+    if (projectType === 'PHD Thesis') {
+      // For PhD Thesis: get from contributor.advisor.matched_profile
+      facultyId = documentData.contributor?.advisor?.matched_profile;
+      
+      // Handle if matched_profile is an object with $oid (from JSON export)
+      if (facultyId && typeof facultyId === 'object' && facultyId.$oid) {
+        facultyId = facultyId.$oid;
+      }
+    } else {
+      // For Research: get first non-null matched_profile from authors array
+      if (documentData.authors && Array.isArray(documentData.authors)) {
+        for (const author of documentData.authors) {
+          if (author.matched_profile) {
+            facultyId = author.matched_profile;
+            // Handle if matched_profile is an object with $oid
+            if (typeof facultyId === 'object' && facultyId.$oid) {
+              facultyId = facultyId.$oid;
+            }
+            break;
+          }
+        }
+      }
+    }
+    
+    if (!facultyId) {
+      return res.status(400).json({
+        success: false,
+        error: 'No matched faculty profile found in document'
+      });
+    }
+    
+    // Validate faculty ObjectId
+    if (!mongoose.Types.ObjectId.isValid(facultyId)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid faculty ID in document'
+      });
+    }
+    
+    // Get department_id from faculty collection
+    const faculty = await Faculty.findById(facultyId);
+    
+    if (!faculty) {
+      return res.status(404).json({
+        success: false,
+        error: 'Faculty not found'
+      });
+    }
+    
+    const departmentId = faculty.department;
+    
+    if (!departmentId) {
+      return res.status(404).json({
+        success: false,
+        error: 'Department not found for faculty'
+      });
+    }
+    
+    // Get department name to determine category
+    const department = await Department.findById(departmentId);
+    
+    if (!department) {
+      return res.status(404).json({
+        success: false,
+        error: 'Department not found'
+      });
+    }
+    
+    // Determine category based on department name
+    const deptName = department.name.toLowerCase();
+    let category;
+    
+    if (deptName.includes('school')) {
+      category = 'Schools';
+    } else if (deptName.includes('centre') || deptName.includes('center')) {
+      category = 'Centres';
+    } else {
+      category = 'Departments';
+    }
+    
+    // Get document _id
+    const docId = documentData._id?.$oid || documentData._id;
+    
+    res.json({
+      success: true,
+      data: {
+        project_type: projectType,
+        faculty_id: facultyId.toString(),
+        department_id: departmentId.toString(),
+        category: category,
+        doc_id: docId ? docId.toString() : null
+      }
+    });
+  } catch (error) {
+    console.error('Error getting open path:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to get open path'
+    });
+  }
+};
