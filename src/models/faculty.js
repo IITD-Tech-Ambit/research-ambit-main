@@ -16,6 +16,24 @@ const facultySchema = new mongoose.Schema({
         unique: true,
         lowercase: true,
         trim: true
+    },
+    citationCount: {
+        type: Number,
+        default: 0
+    },
+    hIndex: {
+        type: Number,
+        default: 0
+    },
+    research_areas: {
+        type: [String],
+        default: []
+    },
+    orcId: {
+        type: String,
+    },
+    scopusId: {
+        type: String,
     }
 });
 
