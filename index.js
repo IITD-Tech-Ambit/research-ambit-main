@@ -42,8 +42,8 @@ app.use(globalErrorHandler);
 // Connect to database
 db();
 
-// Only listen if not running in Vercel (Vercel handles the port binding)
-if (process.env.NODE_ENV !== "production") {
+// Listen on port (Vercel handles binding differently via serverless)
+if (!process.env.VERCEL) {
   app.listen(PORT, () => {
     console.log(`Server is running on http://localhost:${PORT}`);
   });
