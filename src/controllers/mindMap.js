@@ -25,13 +25,15 @@ export const getCategories = async (req, res) => {
 
 // ==================== Layer 3: Department Collections ====================
 
-// Get all departments (excluding schools and centres)
+// Get all departments (excluding schools, centres, and 'Other' category)
 export const getDepartments = async (req, res) => {
   try {
     const departments = await Department.find({
       name: { 
         $not: { $regex: /centre|center|school/i } 
-      }
+      },
+      // Exclude departments with category 'Other'
+      category: { $ne: 'Other' }
     }).sort({ name: 1 });
 
     const departmentData = departments.map(dept => ({
