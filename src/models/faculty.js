@@ -40,5 +40,6 @@ const facultySchema = new mongoose.Schema({
 // === INDEXES ===
 facultySchema.index({ department: 1 });
 facultySchema.index({ name: 1 });
+facultySchema.index({ name: 'text' }); // Text index for search
 
 export default mongoose.model("Faculty", facultySchema);
