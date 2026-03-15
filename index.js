@@ -17,7 +17,10 @@ const PORT = process.env.PORT || 3002;
 
 app.set("trust proxy", true);
 
-app.use(morgan("dev"));
+// Use combined format in production, dev in development
+app.use(morgan(process.env.NODE_ENV === "production" ? "combined" : "dev", {
+  skip: (req) => req.url === "/" || req.url === "/health"
+}));
 
 app.use(cors());
 app.use(express.json({ limit: "50mb" }));
@@ -26,12 +29,11 @@ app.use(express.static("public"));
 
 
 app.get("/", (req, res) => {
-  const ipAddress = req.ip;
-  successResponse(
-    res,
-    { ipAddress: ipAddress },
-    "The service is healthy and running!"
-  );
+  successResponse(res, { status: "ok" }, "Service healthy");
+});
+
+app.get("/health", (req, res) => {
+  res.status(200).json({ status: "ok", timestamp: new Date().toISOString() });
 });
 
 app.use("/api", router);
