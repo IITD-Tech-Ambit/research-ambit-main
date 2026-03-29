@@ -1,3 +1,4 @@
+import { time, timeStamp } from "console";
 import mongoose from "mongoose";
 
 
@@ -69,6 +70,8 @@ const ResearchMetaDataScopus = new mongoose.Schema({
         required: true,
         unique: true
     }
+}, {
+    timestamps: true
 });
 
 // === INDEXES ===
