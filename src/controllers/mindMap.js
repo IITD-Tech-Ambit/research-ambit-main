@@ -126,11 +126,12 @@ export const getFacultiesByDepartment = async (req, res) => {
     // Find all faculties with this department _id
     const faculties = await Faculty.find({ 
       department: departmentId 
-    }).sort({ name: 1 });
-    
+    }).sort({ firstName: 1 });
+
     const facultyData = faculties.map(faculty => ({
       _id: faculty._id.toString(),
-      name: faculty.name
+      firstName: faculty.firstName,
+      lastName: faculty.lastName
     }));
     
     res.json({
@@ -259,9 +260,17 @@ export const getResearchByFaculty = async (req, res) => {
       });
     }
     
-    // Find all research papers where authors array contains matched_profile matching the faculty ID
+    // Find all research papers by expert_id matching the faculty's expert_id
+    const faculty = await Faculty.findById(facultyId);
+    if (!faculty) {
+      return res.json({
+        success: true,
+        count: 0,
+        data: []
+      });
+    }
     const research = await ResearchMetadata.find({
-      'authors.matched_profile': facultyId
+      expert_id: faculty.expert_id
     }).sort({ publication_year: -1, title: 1 });
     
     const researchData = research.map(paper => ({
@@ -341,34 +350,28 @@ export const getOpenPath = async (req, res) => {
     if (projectType === 'PHD Thesis') {
       // For PhD Thesis: get from contributor.advisor.matched_profile
       facultyId = documentData.contributor?.advisor?.matched_profile;
-      
+
       // Handle if matched_profile is an object with $oid (from JSON export)
       if (facultyId && typeof facultyId === 'object' && facultyId.$oid) {
         facultyId = facultyId.$oid;
       }
     } else {
-      // For Research: get first non-null matched_profile from authors array
-      if (documentData.authors && Array.isArray(documentData.authors)) {
-        for (const author of documentData.authors) {
-          if (author.matched_profile) {
-            facultyId = author.matched_profile;
-            // Handle if matched_profile is an object with $oid
-            if (typeof facultyId === 'object' && facultyId.$oid) {
-              facultyId = facultyId.$oid;
-            }
-            break;
-          }
+      // For Research: find faculty by expert_id
+      if (documentData.expert_id) {
+        const matchedFaculty = await Faculty.findOne({ expert_id: documentData.expert_id });
+        if (matchedFaculty) {
+          facultyId = matchedFaculty._id.toString();
         }
       }
     }
-    
+
     if (!facultyId) {
       return res.status(400).json({
         success: false,
         error: 'No matched faculty profile found in document'
       });
     }
-    
+
     // Validate faculty ObjectId
     if (!mongoose.Types.ObjectId.isValid(facultyId)) {
       return res.status(400).json({
@@ -376,7 +379,7 @@ export const getOpenPath = async (req, res) => {
         error: 'Invalid faculty ID in document'
       });
     }
-    
+
     // Get department_id from faculty collection
     const faculty = await Faculty.findById(facultyId);
     

@@ -12,14 +12,14 @@ directory.getAllFaculties = asyncErrorHandler(async (req, res) => {
     const page = Math.max(1, parseInt(req.query.page) || 1);
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 9));
     const skip = (page - 1) * limit;
-    const sortBy = req.query.sortBy || "hIndex";
+    const sortBy = req.query.sortBy || "h_index";
     const sortOrder = req.query.order === "asc" ? 1 : -1;
 
     const sortFields = {
-        name: "name",
-        hIndex: "hIndex"
+        name: "firstName",
+        h_index: "h_index"
     };
-    const sortField = sortFields[sortBy] || "hIndex";
+    const sortField = sortFields[sortBy] || "h_index";
 
     const pipeline = [
         {
@@ -36,13 +36,15 @@ directory.getAllFaculties = asyncErrorHandler(async (req, res) => {
         { $limit: limit },
         {
             $project: {
-                name: 1,
+                firstName: 1,
+                lastName: 1,
                 email: 1,
-                citationCount: 1,
-                hIndex: 1,
-                research_areas: 1,
-                orcId: 1,
-                scopusId: 1,
+                citation_count: 1,
+                h_index: 1,
+                expertise: 1,
+                orcid_id: 1,
+                scopus_id: 1,
+                profile_image_url: 1,
                 "department._id": 1,
                 "department.name": 1,
                 "department.code": 1
@@ -97,8 +99,8 @@ directory.getFacultiesGroupedByDepartment = asyncErrorHandler(async (req, res) =
         { $unwind: "$department" },
         // Filter by category
         ...(Object.keys(matchStage).length > 0 ? [{ $match: matchStage }] : []),
-        // Sort by hIndex descending within each group
-        { $sort: { "department.name": 1, hIndex: -1 } },
+        // Sort by h_index descending within each group
+        { $sort: { "department.name": 1, h_index: -1 } },
         // Group by department
         {
             $group: {
@@ -109,17 +111,19 @@ directory.getFacultiesGroupedByDepartment = asyncErrorHandler(async (req, res) =
                 faculties: {
                     $push: {
                         _id: "$_id",
-                        name: "$name",
+                        firstName: "$firstName",
+                        lastName: "$lastName",
                         email: "$email",
-                        citationCount: "$citationCount",
-                        hIndex: "$hIndex",
-                        research_areas: "$research_areas",
-                        orcId: "$orcId",
-                        scopusId: "$scopusId"
+                        citation_count: "$citation_count",
+                        h_index: "$h_index",
+                        expertise: "$expertise",
+                        orcid_id: "$orcid_id",
+                        scopus_id: "$scopus_id",
+                        profile_image_url: "$profile_image_url"
                     }
                 },
                 totalFaculty: { $sum: 1 },
-                avgHIndex: { $avg: "$hIndex" }
+                avgHIndex: { $avg: "$h_index" }
             }
         },
         // Sort departments by name
@@ -181,21 +185,24 @@ directory.searchFaculties = asyncErrorHandler(async (req, res) => {
         {
             $match: {
                 $or: [
-                    { name: regexPattern },
+                    { firstName: regexPattern },
+                    { lastName: regexPattern },
                     { "department.name": regexPattern }
                 ]
             }
         },
-        { $sort: { hIndex: -1 } },
+        { $sort: { h_index: -1 } },
         { $limit: limit },
         {
             $project: {
                 _id: 1,
-                name: 1,
+                firstName: 1,
+                lastName: 1,
                 email: 1,
-                hIndex: 1,
-                citationCount: 1,
-                research_areas: 1,
+                h_index: 1,
+                citation_count: 1,
+                expertise: 1,
+                profile_image_url: 1,
                 "department._id": 1,
                 "department.name": 1,
                 "department.code": 1
@@ -247,24 +254,20 @@ directory.getFacultyCoworking = asyncErrorHandler(async (req, res) => {
         throw new BadRequestError("Faculty not found");
     }
     const papersWithFaculty = await research_scopus.find({
-        "authors.matched_profile": faculty._id
+        expert_id: faculty.expert_id
     });
     const coworkersFromScopus = new Map();
     papersWithFaculty.forEach(paper => {
         paper.authors.forEach(author => {
-            if (author.matched_profile?.toString() !== faculty._id.toString()) {
-                if (!coworkersFromScopus.has(author.author_id)) {
-                    coworkersFromScopus.set(author.author_id, {
-                        title: paper.title,
-                        publication_year: paper.publication_year,
-                        document_type: paper.document_type,
-                        subject_area: paper.subject_area,
-                        name: author.author_name,
-                        affiliation: author.author_affiliation || "Unknown",
-                        author_id: author.author_id,
-                        matched_profile: author.matched_profile || null
-                    });
-                }
+            if (!coworkersFromScopus.has(author.author_id)) {
+                coworkersFromScopus.set(author.author_id, {
+                    title: paper.title,
+                    publication_year: paper.publication_year,
+                    document_type: paper.document_type,
+                    subject_area: paper.subject_area,
+                    name: author.author_name,
+                    author_id: author.author_id,
+                });
             }
         });
     });
@@ -289,13 +292,14 @@ directory.getFacultyCoworking = asyncErrorHandler(async (req, res) => {
 
     return successResponse(res, {
         faculty: {
-            name: faculty.name,
+            firstName: faculty.firstName,
+            lastName: faculty.lastName,
             _id: faculty._id,
             tags: tagsCowork
         },
-        hIndex: faculty.hIndex,
-        citationCount: faculty.citationCount,
-        scopusId: faculty.scopusId,
+        h_index: faculty.h_index,
+        citation_count: faculty.citation_count,
+        scopus_id: faculty.scopus_id,
         coworkersFromPapers: Array.from(coworkersFromScopus.values()),
         studentsSupervised: studentsFromThesis,
         stats: {
