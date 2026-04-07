@@ -59,11 +59,6 @@ const ResearchMetaDataScopus = new mongoose.Schema({
         type: String,
     }],
     authors: [AuthorSchema],
-    expert_id:{
-        type: String,
-        ref: 'Faculty',
-        required: true
-    },
     open_search_id: {
         type: String,
         required: true,
@@ -96,8 +91,5 @@ ResearchMetaDataScopus.index(
     { title: "text", abstract: "text" },
     { weights: { title: 10, abstract: 1 }, name: "text_search_fallback" }
 );
-
-// 6. Index to quickly find all publications for a given expert
-ResearchMetaDataScopus.index({ expert_id: 1 });
 
 export default mongoose.model("ResearchMetaDataScopus", ResearchMetaDataScopus);

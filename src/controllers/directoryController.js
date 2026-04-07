@@ -4,6 +4,7 @@ import { BadRequestError } from "../lib/customErrors.js";
 import Faculty from "../models/faculty.js";
 import Department from "../models/departments.js";
 import research_scopus from "../models/research_scopus.js";
+import { papersMongoFilterForFaculty } from "../utils/researchFacultyLink.js";
 import phd_thesis from "../models/phd_thesis.js";
 
 let directory = {};
@@ -253,9 +254,9 @@ directory.getFacultyCoworking = asyncErrorHandler(async (req, res) => {
     if (!faculty) {
         throw new BadRequestError("Faculty not found");
     }
-    const papersWithFaculty = await research_scopus.find({
-        expert_id: faculty.expert_id
-    });
+    const papersWithFaculty = await research_scopus.find(
+        papersMongoFilterForFaculty(faculty)
+    );
     const coworkersFromScopus = new Map();
     papersWithFaculty.forEach(paper => {
         paper.authors.forEach(author => {

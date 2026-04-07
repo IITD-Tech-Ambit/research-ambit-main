@@ -2,6 +2,7 @@ import Department from '../models/departments.js';
 import Faculty from '../models/faculty.js';
 import PhdThesis from '../models/phd_thesis.js';
 import ResearchMetadata from '../models/research_scopus.js';
+import { papersMongoFilterForFaculty } from '../utils/researchFacultyLink.js';
 import mongoose from 'mongoose';
 
 // ==================== Layer 2: Categories ====================
@@ -260,7 +261,6 @@ export const getResearchByFaculty = async (req, res) => {
       });
     }
     
-    // Find all research papers by expert_id matching the faculty's expert_id
     const faculty = await Faculty.findById(facultyId);
     if (!faculty) {
       return res.json({
@@ -269,9 +269,9 @@ export const getResearchByFaculty = async (req, res) => {
         data: []
       });
     }
-    const research = await ResearchMetadata.find({
-      expert_id: faculty.expert_id
-    }).sort({ publication_year: -1, title: 1 });
+    const research = await ResearchMetadata.find(
+      papersMongoFilterForFaculty(faculty)
+    ).sort({ publication_year: -1, title: 1 });
     
     const researchData = research.map(paper => ({
       _id: paper._id.toString(),
@@ -356,9 +356,14 @@ export const getOpenPath = async (req, res) => {
         facultyId = facultyId.$oid;
       }
     } else {
-      // For Research: find faculty by expert_id
-      if (documentData.expert_id) {
-        const matchedFaculty = await Faculty.findOne({ expert_id: documentData.expert_id });
+      // For Research: match faculty via Scopus author ids on the paper vs Faculty.scopus_id
+      const authorIds = (documentData.authors || [])
+        .map((a) => a.author_id)
+        .filter(Boolean);
+      if (authorIds.length) {
+        const matchedFaculty = await Faculty.findOne({
+          scopus_id: { $in: authorIds },
+        });
         if (matchedFaculty) {
           facultyId = matchedFaculty._id.toString();
         }
