@@ -482,6 +482,24 @@ directory.searchFaculties = asyncErrorHandler(async (req, res) => {
     }, "Search completed", 200);
 });
 
+directory.getFacultyByScopusId = asyncErrorHandler(async (req, res) => {
+    const { scopusId } = req.params;
+    if (!scopusId || !String(scopusId).trim()) {
+        throw new BadRequestError("No Scopus author id provided");
+    }
+    const sid = String(scopusId).trim();
+    const faculty = await Faculty.findOne({ scopus_id: sid }).lean();
+    if (!faculty) {
+        throw new BadRequestError("Faculty not found for this Scopus id");
+    }
+
+    const department = await findDepartmentByReference(faculty.department);
+    const subjectMap = await buildSubjectAreaMap(collectExpertIds([faculty]));
+    const facultyResponse = formatDirectoryFaculty(faculty, subjectMap, { department });
+
+    return successResponse(res, facultyResponse, "Faculty fetched successfully", 200);
+});
+
 directory.getFacultiesById = asyncErrorHandler(async (req, res) => {
     const { id } = req.params;
     if (!id) {
