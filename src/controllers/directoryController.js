@@ -420,23 +420,76 @@ directory.searchFaculties = asyncErrorHandler(async (req, res) => {
         }, "Search query too short", 200);
     }
 
-    const searchTerm = q.trim();
-    const regexPattern = new RegExp(searchTerm, 'i');
+    // 1. Tokenize: lowercase, trim, split by whitespace
+    const tokens = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
 
-    // Search faculties by name (using regex for partial match)
-    const facultyPromise = Faculty.aggregate([
+    if (tokens.length === 0) {
+        return successResponse(res, {
+            faculties: [],
+            departments: [],
+            total: 0
+        }, "Search query too short", 200);
+    }
+
+    // 2. Build per-token $and conditions on concatenated fullName
+    const tokenMatchConditions = tokens.map((token) => ({
+        fullName: { $regex: escapeRegex(token), $options: "i" }
+    }));
+
+    // 3. Build relevance scoring expressions
+    const fullQuery = tokens.join(" ");
+    const exactMatchExpr = {
+        $cond: [
+            { $regexMatch: { input: "$fullName", regex: `^${escapeRegex(fullQuery)}$`, options: "i" } },
+            3,
+            0
+        ]
+    };
+
+    const wordBoundaryScoreExprs = tokens.map((token) => ({
+        $cond: [
+            { $regexMatch: { input: "$fullName", regex: `\\b${escapeRegex(token)}\\b`, options: "i" } },
+            2,
+            1
+        ]
+    }));
+
+    const relevanceScoreExpr = {
+        $add: [exactMatchExpr, ...wordBoundaryScoreExprs]
+    };
+
+    // 4. Primary search: token-based $and regex on fullName
+    const primaryPipeline = [
         departmentLookupStage,
         { $unwind: "$department" },
         {
-            $match: {
-                $or: [
-                    { firstName: regexPattern },
-                    { lastName: regexPattern },
-                    { "department.name": regexPattern }
-                ]
+            $addFields: {
+                fullName: {
+                    $trim: {
+                        input: {
+                            $replaceAll: {
+                                input: {
+                                    $concat: [
+                                        { $ifNull: ["$title", ""] }, " ",
+                                        { $ifNull: ["$firstName", ""] }, " ",
+                                        { $ifNull: ["$lastName", ""] }
+                                    ]
+                                },
+                                find: "  ",
+                                replacement: " "
+                            }
+                        }
+                    }
+                }
             }
         },
-        { $sort: { h_index: -1 } },
+        { $match: { $and: tokenMatchConditions } },
+        {
+            $addFields: {
+                relevanceScore: relevanceScoreExpr
+            }
+        },
+        { $sort: { relevanceScore: -1, h_index: -1 } },
         { $limit: limit },
         {
             $project: {
@@ -463,15 +516,58 @@ directory.searchFaculties = asyncErrorHandler(async (req, res) => {
                 "department.category": 1
             }
         }
-    ]);
+    ];
 
-    // Search departments by name
+    // 5. Search departments by name (unchanged)
+    const deptRegex = new RegExp(tokens.map(escapeRegex).join(".*"), "i");
     const departmentPromise = Department.find(
-        { name: regexPattern },
+        { name: deptRegex },
         { name: 1, code: 1, category: 1 }
     ).limit(5);
 
-    const [facultiesRaw, departments] = await Promise.all([facultyPromise, departmentPromise]);
+    let [facultiesRaw, departments] = await Promise.all([
+        Faculty.aggregate(primaryPipeline),
+        departmentPromise
+    ]);
+
+    // 6. Fallback: if no regex results, try $text search for typo tolerance
+    if (facultiesRaw.length === 0) {
+        const textSearchPipeline = [
+            { $match: { $text: { $search: q.trim() } } },
+            { $addFields: { relevanceScore: { $meta: "textScore" } } },
+            departmentLookupStage,
+            { $unwind: "$department" },
+            { $sort: { relevanceScore: -1, h_index: -1 } },
+            { $limit: limit },
+            {
+                $project: {
+                    _id: 1,
+                    expert_id: 1,
+                    title: 1,
+                    firstName: 1,
+                    lastName: 1,
+                    email: 1,
+                    h_index: 1,
+                    citation_count: 1,
+                    expertise: 1,
+                    brief_expertise: 1,
+                    subjects: 1,
+                    wos_subjects: 1,
+                    orcid_id: 1,
+                    scopus_id: 1,
+                    profile_image_url: 1,
+                    designation: 1,
+                    working_from_year: 1,
+                    "department._id": 1,
+                    "department.name": 1,
+                    "department.code": 1,
+                    "department.category": 1
+                }
+            }
+        ];
+        facultiesRaw = await Faculty.aggregate(textSearchPipeline);
+    }
+
     const subjectMap = await buildSubjectAreaMap(collectExpertIds(facultiesRaw));
     const faculties = facultiesRaw.map((faculty) => formatDirectoryFaculty(faculty, subjectMap));
 
