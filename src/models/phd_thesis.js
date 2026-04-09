@@ -67,9 +67,9 @@ const PhdThesisSchema = new mongoose.Schema({
 });
 
 // Compound and additional indexes
-PhdThesisSchema.index({ "author.contributor": 1 });
-PhdThesisSchema.index({ "author.advisor.name": 1 });
-PhdThesisSchema.index({ "author.advisor.matched_profile": 1 });
+PhdThesisSchema.index({ "contributor.author": 1 });
+PhdThesisSchema.index({ "contributor.advisor.name": 1 });
+PhdThesisSchema.index({ "contributor.advisor.matched_profile": 1 });
 PhdThesisSchema.index({ subject_area: 1 });
 PhdThesisSchema.index({ title: "text" }); // Text index for full-text search
 PhdThesisSchema.index({ publication_year: -1, document_type: 1 }); // Compound index for common queries
