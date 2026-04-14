@@ -2,7 +2,7 @@ import Department from '../models/departments.js';
 import Faculty from '../models/faculty.js';
 import PhdThesis from '../models/phd_thesis.js';
 import ResearchMetadata from '../models/research_scopus.js';
-import { papersMongoFilterForFaculty } from '../utils/researchFacultyLink.js';
+import { papersMongoFilterForFaculty, facultyFromKerberos } from '../utils/researchFacultyLink.js';
 import mongoose from 'mongoose';
 
 // ==================== Layer 2: Categories ====================
@@ -356,16 +356,24 @@ export const getOpenPath = async (req, res) => {
         facultyId = facultyId.$oid;
       }
     } else {
-      // For Research: match faculty via Scopus author ids on the paper vs Faculty.scopus_id
-      const authorIds = (documentData.authors || [])
-        .map((a) => a.author_id)
-        .filter(Boolean);
-      if (authorIds.length) {
-        const matchedFaculty = await Faculty.findOne({
-          scopus_id: { $in: authorIds },
-        });
-        if (matchedFaculty) {
-          facultyId = matchedFaculty._id.toString();
+      // For Research: try kerberos first (fast direct lookup), then scopus_id (co-author matching)
+      if (documentData.kerberos) {
+        const kerberosMatch = await facultyFromKerberos(documentData.kerberos, Faculty);
+        if (kerberosMatch) {
+          facultyId = kerberosMatch._id.toString();
+        }
+      }
+      if (!facultyId) {
+        const authorIds = (documentData.authors || [])
+          .map((a) => a.author_id)
+          .filter(Boolean);
+        if (authorIds.length) {
+          const matchedFaculty = await Faculty.findOne({
+            scopus_id: { $in: authorIds },
+          });
+          if (matchedFaculty) {
+            facultyId = matchedFaculty._id.toString();
+          }
         }
       }
     }
