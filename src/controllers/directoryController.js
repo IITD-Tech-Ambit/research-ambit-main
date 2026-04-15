@@ -11,6 +11,12 @@ let directory = {};
 
 const MAX_RESEARCH_AREAS = 8;
 
+const kerberosFromEmail = (email) => {
+    if (!email || typeof email !== 'string') return null;
+    const prefix = email.split('@')[0]?.trim().toLowerCase();
+    return prefix || null;
+};
+
 const pickPrimaryIdentifier = (value) => {
     if (Array.isArray(value)) {
         return value.find((item) => typeof item === "string" && item.trim().length > 0) || undefined;
@@ -41,46 +47,6 @@ const normalizeDepartment = (department) => {
     };
 };
 
-<<<<<<< Updated upstream
-const buildSubjectAreaMap = async (expertIds = []) => {
-    if (!Array.isArray(expertIds) || expertIds.length === 0) {
-        return new Map();
-    }
-    const areaCounts = await research_scopus.aggregate([
-        { $match: { expert_id: { $in: expertIds } } },
-        { $unwind: { path: "$subject_area", preserveNullAndEmptyArrays: false } },
-        {
-            $group: {
-                _id: { expert_id: "$expert_id", subject: "$subject_area" },
-                count: { $sum: 1 }
-            }
-        }
-    ]);
-
-    const subjectMap = new Map();
-    areaCounts.forEach(({ _id, count }) => {
-        if (!_id?.expert_id || !_id.subject) {
-            return;
-        }
-        const normalizedSubject = _id.subject.trim();
-        if (!normalizedSubject) {
-            return;
-        }
-        if (!subjectMap.has(_id.expert_id)) {
-            subjectMap.set(_id.expert_id, []);
-        }
-        subjectMap.get(_id.expert_id).push({ subject: normalizedSubject, count });
-    });
-
-    subjectMap.forEach((list, key) => {
-        const sorted = list
-            .sort((a, b) => b.count - a.count)
-            .map((item) => item.subject)
-            .slice(0, MAX_RESEARCH_AREAS);
-        subjectMap.set(key, sorted);
-    });
-
-=======
 const buildSubjectAreaMap = async (kerberosIds = [], expertIdToKerberos = new Map(), expertIdToScopusIds = new Map()) => {
     if (expertIdToKerberos.size === 0 && expertIdToScopusIds.size === 0) {
         return new Map();
@@ -146,7 +112,6 @@ const buildSubjectAreaMap = async (kerberosIds = [], expertIdToKerberos = new Ma
         subjectMap.set(expertId, sorted);
     }
 
->>>>>>> Stashed changes
     return subjectMap;
 };
 
@@ -198,16 +163,6 @@ const formatDirectoryFaculty = (facultyDoc, subjectMap, overrides = {}) => {
     };
 };
 
-<<<<<<< Updated upstream
-const collectExpertIds = (faculties = []) => {
-    const ids = [];
-    faculties.forEach((faculty) => {
-        if (faculty?.expert_id && !ids.includes(faculty.expert_id)) {
-            ids.push(faculty.expert_id);
-        }
-    });
-    return ids;
-=======
 /**
  * Collect kerberos IDs, scopus IDs, and build expert_id mappings
  * for use with buildSubjectAreaMap (dual kerberos + scopus strategy).
@@ -230,7 +185,6 @@ const collectKerberosInfo = (faculties = []) => {
         }
     });
     return { kerberosIds, expertIdToKerberos, expertIdToScopusIds };
->>>>>>> Stashed changes
 };
 
 const isPossibleObjectId = (value) => typeof value === "string" && /^[0-9a-fA-F]{24}$/.test(value);
@@ -396,12 +350,8 @@ directory.getAllFaculties = asyncErrorHandler(async (req, res) => {
         Faculty.countDocuments()
     ]);
 
-<<<<<<< Updated upstream
-    const subjectMap = await buildSubjectAreaMap(collectExpertIds(facultiesRaw));
-=======
     const { kerberosIds, expertIdToKerberos, expertIdToScopusIds } = collectKerberosInfo(facultiesRaw);
     const subjectMap = await buildSubjectAreaMap(kerberosIds, expertIdToKerberos, expertIdToScopusIds);
->>>>>>> Stashed changes
     const faculties = facultiesRaw.map((faculty) => formatDirectoryFaculty(faculty, subjectMap));
 
     const totalPages = Math.ceil(total / limit);
@@ -490,12 +440,8 @@ directory.getFacultiesGroupedByDepartment = asyncErrorHandler(async (req, res) =
     const groupedDataRaw = await Faculty.aggregate(pipeline);
 
     const flattenedFaculties = groupedDataRaw.flatMap((dept) => dept.faculties);
-<<<<<<< Updated upstream
-    const subjectMap = await buildSubjectAreaMap(collectExpertIds(flattenedFaculties));
-=======
     const { kerberosIds: kIds, expertIdToKerberos: e2k, expertIdToScopusIds: s2k } = collectKerberosInfo(flattenedFaculties);
     const subjectMap = await buildSubjectAreaMap(kIds, e2k, s2k);
->>>>>>> Stashed changes
 
     const groupedData = groupedDataRaw.map((dept) => ({
         ...dept,
@@ -671,12 +617,8 @@ directory.searchFaculties = asyncErrorHandler(async (req, res) => {
         facultiesRaw = await Faculty.aggregate(textSearchPipeline);
     }
 
-<<<<<<< Updated upstream
-    const subjectMap = await buildSubjectAreaMap(collectExpertIds(facultiesRaw));
-=======
     const { kerberosIds: sKids, expertIdToKerberos: sE2k, expertIdToScopusIds: sS2k } = collectKerberosInfo(facultiesRaw);
     const subjectMap = await buildSubjectAreaMap(sKids, sE2k, sS2k);
->>>>>>> Stashed changes
     const faculties = facultiesRaw.map((faculty) => formatDirectoryFaculty(faculty, subjectMap));
 
     return successResponse(res, {
@@ -698,12 +640,8 @@ directory.getFacultyByScopusId = asyncErrorHandler(async (req, res) => {
     }
 
     const department = await findDepartmentByReference(faculty.department);
-<<<<<<< Updated upstream
-    const subjectMap = await buildSubjectAreaMap(collectExpertIds([faculty]));
-=======
     const { kerberosIds: bsKids, expertIdToKerberos: bsE2k, expertIdToScopusIds: bsS2k } = collectKerberosInfo([faculty]);
     const subjectMap = await buildSubjectAreaMap(bsKids, bsE2k, bsS2k);
->>>>>>> Stashed changes
     const facultyResponse = formatDirectoryFaculty(faculty, subjectMap, { department });
 
     return successResponse(res, facultyResponse, "Faculty fetched successfully", 200);
@@ -720,12 +658,8 @@ directory.getFacultiesById = asyncErrorHandler(async (req, res) => {
     }
 
     const department = await findDepartmentByReference(faculty.department);
-<<<<<<< Updated upstream
-    const subjectMap = await buildSubjectAreaMap(collectExpertIds([faculty]));
-=======
     const { kerberosIds: fbKids, expertIdToKerberos: fbE2k, expertIdToScopusIds: fbS2k } = collectKerberosInfo([faculty]);
     const subjectMap = await buildSubjectAreaMap(fbKids, fbE2k, fbS2k);
->>>>>>> Stashed changes
     const facultyResponse = formatDirectoryFaculty(faculty, subjectMap, { department });
 
     return successResponse(res, facultyResponse, "Faculty fetched successfully", 200);
