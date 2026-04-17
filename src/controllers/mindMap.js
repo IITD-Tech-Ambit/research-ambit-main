@@ -356,16 +356,35 @@ export const getOpenPath = async (req, res) => {
         facultyId = facultyId.$oid;
       }
     } else {
-      // For Research: match faculty via Scopus author ids on the paper vs Faculty.scopus_id
+      // For Research: resolve IITD faculty via (1) Scopus author_ids on the paper,
+      // then fall back to (2) the top-level `kerberos` field (email prefix) that the
+      // OpenSearch pipeline stamps on each hydrated paper. Many papers are linked to
+      // faculty only via kerberos when Scopus authors are external collaborators.
       const authorIds = (documentData.authors || [])
-        .map((a) => a.author_id)
+        .map((a) => a?.author_id)
         .filter(Boolean);
+
       if (authorIds.length) {
         const matchedFaculty = await Faculty.findOne({
           scopus_id: { $in: authorIds },
         });
         if (matchedFaculty) {
           facultyId = matchedFaculty._id.toString();
+        }
+      }
+
+      if (!facultyId) {
+        const kerberos = typeof documentData.kerberos === 'string'
+          ? documentData.kerberos.trim().toLowerCase()
+          : '';
+        if (kerberos) {
+          const escaped = kerberos.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          const matchedFaculty = await Faculty.findOne({
+            email: new RegExp(`^${escaped}@`, 'i'),
+          });
+          if (matchedFaculty) {
+            facultyId = matchedFaculty._id.toString();
+          }
         }
       }
     }
@@ -414,16 +433,23 @@ export const getOpenPath = async (req, res) => {
       });
     }
     
-    // Determine category based on department name
-    const deptName = department.name.toLowerCase();
+    // Determine category. Prefer the Department.category field (authoritative),
+    // fall back to a substring match on the name for legacy data.
     let category;
-    
-    if (deptName.includes('school')) {
-      category = 'Schools';
-    } else if (deptName.includes('centre') || deptName.includes('center')) {
-      category = 'Centres';
+    const deptCategoryRaw = typeof department.category === 'string' ? department.category.trim() : '';
+    const categoryMap = {
+      'Department': 'Departments',
+      'School': 'Schools',
+      'Centre': 'Centres',
+      'Research Lab / Facility': 'Departments',
+    };
+    if (deptCategoryRaw && categoryMap[deptCategoryRaw]) {
+      category = categoryMap[deptCategoryRaw];
     } else {
-      category = 'Departments';
+      const deptName = (department.name || '').toLowerCase();
+      if (deptName.includes('school')) category = 'Schools';
+      else if (deptName.includes('centre') || deptName.includes('center')) category = 'Centres';
+      else category = 'Departments';
     }
     
     // Get document _id

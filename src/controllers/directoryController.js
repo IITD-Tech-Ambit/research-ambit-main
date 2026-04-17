@@ -191,7 +191,8 @@ const isPossibleObjectId = (value) => typeof value === "string" && /^[0-9a-fA-F]
 
 const findDepartmentByReference = async (reference) => {
     if (!reference) return null;
-    if (typeof reference === "object" && reference._id) {
+    // Populated / aggregated department document
+    if (typeof reference === "object" && typeof reference.name === "string") {
         return reference;
     }
     if (typeof reference === "string") {
@@ -199,6 +200,21 @@ const findDepartmentByReference = async (reference) => {
         if (byCode) return byCode;
         if (isPossibleObjectId(reference)) {
             return Department.findById(reference, "name code category").lean();
+        }
+        return null;
+    }
+    if (typeof reference === "object" && reference._id != null) {
+        const innerId = String(reference._id);
+        if (isPossibleObjectId(innerId)) {
+            const dept = await Department.findById(innerId, "name code category").lean();
+            if (dept) return dept;
+        }
+    }
+    // Bare ObjectId from Faculty.findOne().lean() (no ._id property on the id itself)
+    if (typeof reference === "object" && typeof reference.toString === "function") {
+        const asStr = String(reference);
+        if (isPossibleObjectId(asStr)) {
+            return Department.findById(asStr, "name code category").lean();
         }
     }
     return null;
@@ -645,6 +661,65 @@ directory.getFacultyByScopusId = asyncErrorHandler(async (req, res) => {
     const facultyResponse = formatDirectoryFaculty(faculty, subjectMap, { department });
 
     return successResponse(res, facultyResponse, "Faculty fetched successfully", 200);
+});
+
+/**
+ * Batch-resolve Scopus author ids → IITD Faculty profiles.
+ * Body: { scopusIds: string[] }
+ * Response: { matches: { [scopusId: string]: DirectoryFaculty } }
+ * Missing ids are simply absent from the map.
+ */
+directory.resolveFacultiesByScopusIds = asyncErrorHandler(async (req, res) => {
+    const raw = Array.isArray(req.body?.scopusIds) ? req.body.scopusIds : [];
+    const ids = [...new Set(
+        raw
+            .map((v) => (v == null ? "" : String(v).trim()))
+            .filter((v) => v.length > 0)
+    )];
+
+    if (ids.length === 0) {
+        return successResponse(res, { matches: {} }, "No Scopus ids provided", 200);
+    }
+
+    const faculties = await Faculty.find({ scopus_id: { $in: ids } }).lean();
+    if (faculties.length === 0) {
+        return successResponse(res, { matches: {} }, "No matching faculty", 200);
+    }
+
+    const deptIds = faculties
+        .map((f) => f.department)
+        .filter(Boolean)
+        .map((d) => (typeof d === "object" && d._id ? String(d._id) : String(d)))
+        .filter((id) => isPossibleObjectId(id));
+    const uniqueDeptIds = [...new Set(deptIds)];
+    const departmentDocs = uniqueDeptIds.length
+        ? await Department.find({ _id: { $in: uniqueDeptIds } }, "name code category").lean()
+        : [];
+    const departmentById = new Map(departmentDocs.map((d) => [String(d._id), d]));
+
+    const { kerberosIds, expertIdToKerberos, expertIdToScopusIds } = collectKerberosInfo(faculties);
+    const subjectMap = await buildSubjectAreaMap(kerberosIds, expertIdToKerberos, expertIdToScopusIds);
+
+    const matches = {};
+    for (const faculty of faculties) {
+        const deptRef = faculty.department;
+        let department = null;
+        if (deptRef && typeof deptRef === "object" && typeof deptRef.name === "string") {
+            department = deptRef;
+        } else if (deptRef) {
+            const key = typeof deptRef === "object" && deptRef._id ? String(deptRef._id) : String(deptRef);
+            department = departmentById.get(key) || null;
+        }
+        const formatted = formatDirectoryFaculty(faculty, subjectMap, { department });
+        for (const sid of faculty.scopus_id || []) {
+            const key = String(sid).trim();
+            if (ids.includes(key)) {
+                matches[key] = formatted;
+            }
+        }
+    }
+
+    return successResponse(res, { matches }, "Resolved", 200);
 });
 
 directory.getFacultiesById = asyncErrorHandler(async (req, res) => {
