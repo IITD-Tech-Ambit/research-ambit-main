@@ -8,6 +8,7 @@ router.get("/", directory.getAllFaculties);
 router.get("/search", directory.searchFaculties);
 router.get("/grouped", directory.getFacultiesGroupedByDepartment);
 router.get("/by-scopus/:scopusId", directory.getFacultyByScopusId);
+router.post("/by-scopus/batch", directory.resolveFacultiesByScopusIds);
 router.get("/:id", directory.getFacultiesById);
 router.get("/coworkers/:id", directory.getFacultyCoworking);
 
