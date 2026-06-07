@@ -1,6 +1,7 @@
 import { asyncErrorHandler } from "../middleware/errorHandler.js";
 import { successResponse } from "../lib/responseUtils.js";
 import { BadRequestError } from "../lib/customErrors.js";
+import mongoose from "mongoose";
 import Faculty from "../models/faculty.js";
 import Department from "../models/departments.js";
 import research_scopus from "../models/research_scopus.js";
@@ -312,6 +313,47 @@ const departmentLookupStage = {
     }
 };
 
+const EMPTY_SUBJECT_MAP = new Map();
+
+const facultyCardProjectFields = {
+    _id: 1,
+    title: 1,
+    firstName: 1,
+    lastName: 1,
+    email: 1,
+    citation_count: 1,
+    h_index: 1,
+    expertise: 1,
+    brief_expertise: 1,
+    subjects: 1,
+    wos_subjects: 1,
+    profile_image_url: 1,
+    designation: 1,
+    "department._id": 1,
+    "department.name": 1,
+    "department.code": 1
+};
+
+const formatDirectoryFacultyCards = (facultyDocs = [], departmentOverride = null) =>
+    facultyDocs.map((facultyDoc) => {
+        const formatted = formatDirectoryFaculty(
+            facultyDoc,
+            EMPTY_SUBJECT_MAP,
+            { department: departmentOverride || facultyDoc.department }
+        );
+        return {
+            _id: formatted._id,
+            name: formatted.name,
+            email: formatted.email,
+            citationCount: formatted.citationCount,
+            hIndex: formatted.hIndex,
+            research_areas: formatted.research_areas,
+            department: formatted.department,
+            profileImageUrl: formatted.profileImageUrl,
+            designation: formatted.designation
+        };
+    });
+
 directory.getAllFaculties = asyncErrorHandler(async (req, res) => {
     const page = Math.max(1, parseInt(req.query.page) || 1);
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 9));
@@ -335,30 +377,7 @@ directory.getAllFaculties = asyncErrorHandler(async (req, res) => {
         { $sort: { [sortField]: sortOrder, _id: 1 } },
         { $skip: skip },
         { $limit: limit },
-        {
-            $project: {
-                expert_id: 1,
-                title: 1,
-                firstName: 1,
-                lastName: 1,
-                email: 1,
-                citation_count: 1,
-                h_index: 1,
-                expertise: 1,
-                brief_expertise: 1,
-                subjects: 1,
-                wos_subjects: 1,
-                orcid_id: 1,
-                scopus_id: 1,
-                profile_image_url: 1,
-                designation: 1,
-                working_from_year: 1,
-                "department._id": 1,
-                "department.name": 1,
-                "department.code": 1,
-                "department.category": 1
-            }
-        }
+        { $project: facultyCardProjectFields }
     ];
 
     const [facultiesRaw, total] = await Promise.all([
@@ -366,9 +385,7 @@ directory.getAllFaculties = asyncErrorHandler(async (req, res) => {
         Faculty.countDocuments()
     ]);
 
-    const { kerberosIds, expertIdToKerberos, expertIdToScopusIds } = collectKerberosInfo(facultiesRaw);
-    const subjectMap = await buildSubjectAreaMap(kerberosIds, expertIdToKerberos, expertIdToScopusIds);
-    const faculties = facultiesRaw.map((faculty) => formatDirectoryFaculty(faculty, subjectMap));
+    const faculties = formatDirectoryFacultyCards(facultiesRaw);
 
     const totalPages = Math.ceil(total / limit);
 
@@ -385,92 +402,142 @@ directory.getAllFaculties = asyncErrorHandler(async (req, res) => {
     }, "Faculties fetched successfully", 200);
 });
 
+const DIRECTORY_CATEGORY_MAP = {
+    departments: "Department",
+    schools: "School",
+    centres: "Centre",
+    researchlabs: "Research Lab / Facility"
+};
+
+const buildGroupedCategoryMatch = (category) => {
+    const dbCategory = category && DIRECTORY_CATEGORY_MAP[category];
+    return dbCategory ? { "department.category": dbCategory } : {};
+};
+
+const summaryDepartmentProjection = {
+    _id: 1,
+    department: {
+        _id: "$department._id",
+        name: "$department.name"
+    },
+    stats: {
+        totalFaculty: "$totalFaculty"
+    }
+};
+
+const facultyCardPushFields = {
+    _id: "$_id",
+    title: "$title",
+    firstName: "$firstName",
+    lastName: "$lastName",
+    email: "$email",
+    citation_count: "$citation_count",
+    h_index: "$h_index",
+    expertise: "$expertise",
+    brief_expertise: "$brief_expertise",
+    subjects: "$subjects",
+    wos_subjects: "$wos_subjects",
+    profile_image_url: "$profile_image_url",
+    designation: "$designation"
+};
+
+const formatGroupedFaculties = async (groupedDataRaw) => {
+    return groupedDataRaw.map((dept) => ({
+        _id: dept._id,
+        department: dept.department,
+        stats: dept.stats,
+        faculties: formatDirectoryFacultyCards(dept.faculties || [], dept.department)
+    }));
+};
+
 directory.getFacultiesGroupedByDepartment = asyncErrorHandler(async (req, res) => {
     const category = req.query.category; // 'departments', 'schools', 'centres', 'researchlabs'
+    const summaryOnly = req.query.summaryOnly === "true";
 
-    // Map frontend category values to database category values
-    const categoryMap = {
-        departments: "Department",
-        schools: "School",
-        centres: "Centre",
-        researchlabs: "Research Lab / Facility"
-    };
-
-    const matchStage = category && categoryMap[category]
-        ? { "department.category": categoryMap[category] }
-        : {};
+    const matchStage = buildGroupedCategoryMatch(category);
 
     const pipeline = [
         departmentLookupStage,
         { $unwind: "$department" },
         ...(Object.keys(matchStage).length > 0 ? [{ $match: matchStage }] : []),
-        { $sort: { "department.name": 1, h_index: -1 } },
+        ...(summaryOnly ? [] : [{ $sort: { "department.name": 1, h_index: -1 } }]),
         {
             $group: {
                 _id: "$department._id",
-                department: { $first: "$department" },
-                faculties: {
-                    $push: {
-                        _id: "$_id",
-                        expert_id: "$expert_id",
-                        title: "$title",
-                        firstName: "$firstName",
-                        lastName: "$lastName",
-                        email: "$email",
-                        citation_count: "$citation_count",
-                        h_index: "$h_index",
-                        expertise: "$expertise",
-                        brief_expertise: "$brief_expertise",
-                        subjects: "$subjects",
-                        wos_subjects: "$wos_subjects",
-                        orcid_id: "$orcid_id",
-                        scopus_id: "$scopus_id",
-                        profile_image_url: "$profile_image_url",
-                        designation: "$designation",
-                        working_from_year: "$working_from_year"
+                department: {
+                    $first: {
+                        _id: "$department._id",
+                        name: "$department.name"
                     }
                 },
+                ...(summaryOnly
+                    ? {}
+                    : { faculties: { $push: facultyCardPushFields } }),
                 totalFaculty: { $sum: 1 },
-                avgHIndex: { $avg: "$h_index" }
+                ...(summaryOnly ? {} : { avgHIndex: { $avg: "$h_index" } })
             }
         },
         { $sort: { "department.name": 1 } },
         {
-            $project: {
-                _id: 1,
-                department: {
-                    _id: "$department._id",
-                    name: "$department.name",
-                    code: "$department.code",
-                    category: "$department.category"
-                },
-                faculties: 1,
-                stats: {
-                    totalFaculty: "$totalFaculty",
-                    avgHIndex: { $round: ["$avgHIndex", 1] }
+            $project: summaryOnly
+                ? summaryDepartmentProjection
+                : {
+                    _id: 1,
+                    department: 1,
+                    faculties: 1,
+                    stats: {
+                        totalFaculty: "$totalFaculty",
+                        avgHIndex: { $round: ["$avgHIndex", 1] }
+                    }
                 }
-            }
         }
     ];
 
     const groupedDataRaw = await Faculty.aggregate(pipeline);
 
-    const flattenedFaculties = groupedDataRaw.flatMap((dept) => dept.faculties);
-    const { kerberosIds: kIds, expertIdToKerberos: e2k, expertIdToScopusIds: s2k } = collectKerberosInfo(flattenedFaculties);
-    const subjectMap = await buildSubjectAreaMap(kIds, e2k, s2k);
+    if (summaryOnly) {
+        return successResponse(res, {
+            departments: groupedDataRaw,
+            totalDepartments: groupedDataRaw.length,
+            totalFaculty: groupedDataRaw.reduce((sum, d) => sum + d.stats.totalFaculty, 0)
+        }, "Grouped department summary fetched successfully", 200);
+    }
 
-    const groupedData = groupedDataRaw.map((dept) => ({
-        ...dept,
-        faculties: dept.faculties.map((faculty) =>
-            formatDirectoryFaculty(faculty, subjectMap, { department: dept.department })
-        )
-    }));
+    const groupedData = await formatGroupedFaculties(groupedDataRaw);
 
     return successResponse(res, {
         departments: groupedData,
         totalDepartments: groupedData.length,
         totalFaculty: groupedData.reduce((sum, d) => sum + d.stats.totalFaculty, 0)
     }, "Grouped faculties fetched successfully", 200);
+});
+
+directory.getFacultiesForDepartmentGroup = asyncErrorHandler(async (req, res) => {
+    const { departmentId } = req.params;
+    const category = req.query.category;
+
+    if (!departmentId || !mongoose.Types.ObjectId.isValid(String(departmentId))) {
+        throw new BadRequestError("Valid department id is required");
+    }
+
+    const categoryMatch = buildGroupedCategoryMatch(category);
+    const departmentObjectId = new mongoose.Types.ObjectId(String(departmentId));
+    const facultiesRaw = await Faculty.aggregate([
+        departmentLookupStage,
+        { $unwind: "$department" },
+        { $match: { "department._id": departmentObjectId, ...categoryMatch } },
+        { $sort: { h_index: -1, _id: 1 } },
+        { $project: facultyCardProjectFields }
+    ]);
+
+    if (facultiesRaw.length === 0) {
+        throw new BadRequestError("Department not found");
+    }
+
+    const department = normalizeDepartment(facultiesRaw[0].department);
+    const faculties = formatDirectoryFacultyCards(facultiesRaw, department);
+
+    return successResponse(res, { faculties }, "Department faculties fetched successfully", 200);
 });
 
 directory.searchFaculties = asyncErrorHandler(async (req, res) => {
