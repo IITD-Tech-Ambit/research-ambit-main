@@ -7,6 +7,7 @@ import Department from "../models/departments.js";
 import research_scopus from "../models/research_scopus.js";
 import { papersMongoFilterForFaculty } from "../utils/researchFacultyLink.js";
 import phd_thesis from "../models/phd_thesis.js";
+import { getScholarResearchBlock } from "../utils/fetchScholarData.js";
 
 let directory = {};
 
@@ -156,6 +157,7 @@ const formatDirectoryFaculty = (facultyDoc, subjectMap, overrides = {}) => {
         research_areas: mergeResearchAreas(facultyDoc, subjectMap),
         orcId: pickPrimaryIdentifier(facultyDoc.orcid_id),
         scopusId: pickPrimaryIdentifier(facultyDoc.scopus_id),
+        googleScholarId: pickPrimaryIdentifier(facultyDoc.google_scholar_id),
         department: normalizeDepartment(department),
         tags: deriveDepartmentTags(department),
         profileImageUrl: facultyDoc.profile_image_url || null,
@@ -287,6 +289,36 @@ const dedupeByObjectId = (documents = []) => {
         seen.add(id);
         return true;
     });
+};
+
+/**
+ * Resolve a faculty's supervised PhD students from phd_thesis by advisor name /
+ * matched profile. This is independent of the research-data source (Scopus or
+ * Scholar) so both branches of getFacultyCoworking share it.
+ */
+const getSupervisedStudents = async (faculty) => {
+    const advisorNameRegexes = buildAdvisorNameRegexes(faculty);
+    const departmentCode = typeof faculty.department === "string"
+        ? faculty.department
+        : faculty.department?.code;
+
+    const [thesesByProfile, thesesByName] = await Promise.all([
+        phd_thesis.find({ "contributor.advisor.matched_profile": faculty._id }).lean(),
+        advisorNameRegexes.length
+            ? phd_thesis.find({
+                ...(departmentCode ? { department_code: departmentCode } : {}),
+                $or: advisorNameRegexes.map((regex) => ({ "contributor.advisor.name": regex }))
+            }).lean()
+            : Promise.resolve([])
+    ]);
+
+    const thesesWithFaculty = dedupeByObjectId([...thesesByProfile, ...thesesByName]);
+    return thesesWithFaculty.map((thesis) => ({
+        name: thesis.contributor?.author,
+        affiliation: "IIT Delhi",
+        thesis_title: thesis.title,
+        year: thesis.publication_year || null
+    }));
 };
 
 const departmentLookupStage = {
@@ -816,51 +848,6 @@ directory.getFacultyCoworking = asyncErrorHandler(async (req, res) => {
     if (!faculty) {
         throw new BadRequestError("Faculty not found");
     }
-    const scopusId = pickPrimaryIdentifier(faculty.scopus_id);
-    const papersWithFaculty = await research_scopus.find(
-        papersMongoFilterForFaculty(faculty)
-    ).lean();
-    const coworkersFromScopus = new Map();
-    papersWithFaculty.forEach((paper) => {
-        (paper.authors || []).forEach((author) => {
-            if (!author?.author_id) return;
-            if (scopusId && author.author_id === scopusId) return;
-            if (coworkersFromScopus.has(author.author_id)) return;
-            coworkersFromScopus.set(author.author_id, {
-                title: paper.title,
-                publication_year: paper.publication_year,
-                document_type: paper.document_type,
-                subject_area: paper.subject_area || [],
-                name: author.author_name,
-                affiliation: author.author_affiliation || paper.field_associated || "External collaborator",
-                author_id: author.author_id,
-                matched_profile: author.matched_profile || null
-            });
-        });
-    });
-
-    const advisorNameRegexes = buildAdvisorNameRegexes(faculty);
-    const departmentCode = typeof faculty.department === "string"
-        ? faculty.department
-        : faculty.department?.code;
-
-    const [thesesByProfile, thesesByName] = await Promise.all([
-        phd_thesis.find({ "contributor.advisor.matched_profile": faculty._id }).lean(),
-        advisorNameRegexes.length
-            ? phd_thesis.find({
-                ...(departmentCode ? { department_code: departmentCode } : {}),
-                $or: advisorNameRegexes.map((regex) => ({ "contributor.advisor.name": regex }))
-            }).lean()
-            : Promise.resolve([])
-    ]);
-
-    const thesesWithFaculty = dedupeByObjectId([...thesesByProfile, ...thesesByName]);
-    const studentsFromThesis = thesesWithFaculty.map((thesis) => ({
-        name: thesis.contributor?.author,
-        affiliation: "IIT Delhi",
-        thesis_title: thesis.title,
-        year: thesis.publication_year || null
-    }));
 
     const displayName = [faculty.title, faculty.firstName, faculty.lastName]
         .filter(Boolean)
@@ -868,21 +855,157 @@ directory.getFacultyCoworking = asyncErrorHandler(async (req, res) => {
         .replace(/\s+/g, " ")
         .trim();
 
+    // PhD students are resolved by advisor name and are independent of the
+    // research-data source, so compute them once for both branches.
+    const studentsFromThesis = await getSupervisedStudents(faculty);
+    const studentStats = {
+        totalStudentsSupervised: studentsFromThesis.length
+    };
+
+    const scopusIds = (faculty.scopus_id || [])
+        .map(String)
+        .filter((value) => value.trim().length > 0);
+
+    // ── Fallback: faculty has no Scopus id → use Google Scholar ──
+    // (faculty.scopus_id[0] vs faculty.google_scholar_id[0], per spec)
+    if (scopusIds.length === 0) {
+        const scholarBlock = await getScholarResearchBlock(faculty);
+        if (scholarBlock) {
+            // Persist Scholar-derived metrics back to the Faculty document so the
+            // directory listing cards (which read stored h_index/citation_count)
+            // reflect them without a live Scholar fetch per card. Fire-and-forget:
+            // never block or fail the response on a cache-write error.
+            const nextHIndex = scholarBlock.hIndex;
+            const nextCitations = scholarBlock.citationCount;
+            if (faculty.h_index !== nextHIndex || faculty.citation_count !== nextCitations) {
+                Faculty.updateOne(
+                    { _id: faculty._id },
+                    { $set: { h_index: nextHIndex, citation_count: nextCitations } }
+                ).catch((err) =>
+                    console.error(`[scholar] failed to persist metrics for ${faculty._id}: ${err.message}`)
+                );
+            }
+
+            return successResponse(res, {
+                faculty: { name: displayName, _id: faculty._id },
+                source: scholarBlock.source,
+                hIndex: scholarBlock.hIndex,
+                citationCount: scholarBlock.citationCount,
+                scopusId: scholarBlock.scopusId,
+                coworkersFromPapers: scholarBlock.coworkersFromPapers,
+                studentsSupervised: studentsFromThesis,
+                stats: {
+                    totalPapers: scholarBlock.stats.totalPapers,
+                    uniqueCoauthors: scholarBlock.stats.uniqueCoauthors,
+                    ...studentStats
+                },
+                papers: scholarBlock.papers,
+                coAuthors: scholarBlock.coAuthors,
+                publicationTimeline: scholarBlock.publicationTimeline
+            }, "Coworkers fetched successfully", 200);
+        }
+        // No Scholar id, or the Scholar fetch failed/was blocked → fall through
+        // to the Scopus/kerberos path. With no scopus_id that query can still
+        // match papers via the kerberos email link; if nothing matches the
+        // response is a safe empty analytics payload.
+    }
+
+    // ── Scopus / kerberos path (existing behavior, unchanged) ──
+    const scopusId = pickPrimaryIdentifier(faculty.scopus_id);
+    const papersWithFaculty = await research_scopus.find(
+        papersMongoFilterForFaculty(faculty)
+    ).lean();
+    const coworkersFromScopus = new Map();
+    papersWithFaculty.forEach((paper) => {
+        (paper.authors || []).forEach((author) => {
+            // Skip entries with no name at all (not useful to show).
+            if (!author?.author_name) return;
+            // Skip this faculty's own entry (matched by scopus_id or by name).
+            if (scopusId && author.author_id === scopusId) return;
+            // Dedup key: use author_id when present (Scopus), else author_name (Scholar).
+            const key = author.author_id || author.author_name;
+            if (coworkersFromScopus.has(key)) return;
+            coworkersFromScopus.set(key, {
+                title: paper.title,
+                publication_year: paper.publication_year,
+                document_type: paper.document_type,
+                subject_area: paper.subject_area || [],
+                name: author.author_name,
+                affiliation: author.author_affiliation || paper.field_associated || "External collaborator",
+                author_id: author.author_id || "",
+                matched_profile: author.matched_profile || null
+            });
+        });
+    });
+
+    const coworkersList = Array.from(coworkersFromScopus.values());
+
+    // Normalized analytics (additive). Mirrors the Scholar payload so both
+    // sources expose an identical response structure; existing UI ignores them.
+    const normalizedPapers = papersWithFaculty.map((paper) => ({
+        title: paper.title,
+        year: paper.publication_year || null,
+        citations: paper.citation_count ?? 0,
+        type: paper.document_type || "Publication",
+        venue: paper.field_associated || "",
+        authors: (paper.authors || []).map((a) => a.author_name).filter(Boolean)
+    }));
+    const normalizedCoAuthors = coworkersList.map((c) => ({
+        name: c.name,
+        affiliation: c.affiliation,
+        scholarId: ""
+    }));
+    const timelineMap = new Map();
+    papersWithFaculty.forEach((paper) => {
+        const year = paper.publication_year;
+        if (!year) return;
+        timelineMap.set(year, (timelineMap.get(year) || 0) + 1);
+    });
+    const normalizedTimeline = [...timelineMap.entries()]
+        .sort((a, b) => b[0] - a[0])
+        .map(([year, count]) => ({ year, count }));
+
+    // Derive h_index + citation_count from papers and write back to Faculty doc
+    // so directory cards show real values without requiring a re-run of backfill.
+    if (papersWithFaculty.length > 0) {
+        const counts = papersWithFaculty.map((p) => p.citation_count ?? 0);
+        const derivedCitations = counts.reduce((s, c) => s + c, 0);
+        const sortedCounts = [...counts].sort((a, b) => b - a);
+        let derivedH = 0;
+        for (let i = 0; i < sortedCounts.length; i++) {
+            if (sortedCounts[i] >= i + 1) derivedH = i + 1;
+            else break;
+        }
+        // Only write back if stored values differ to avoid unnecessary DB writes.
+        if (faculty.h_index !== derivedH || faculty.citation_count !== derivedCitations) {
+            Faculty.updateOne(
+                { _id: faculty._id },
+                { $set: { h_index: derivedH, citation_count: derivedCitations } }
+            ).catch((err) =>
+                console.error(`[scopus] failed to persist metrics for ${faculty._id}: ${err.message}`)
+            );
+        }
+    }
+
     return successResponse(res, {
         faculty: {
             name: displayName,
             _id: faculty._id
         },
+        source: "scopus",
         hIndex: faculty.h_index ?? 0,
         citationCount: faculty.citation_count ?? 0,
         scopusId,
-        coworkersFromPapers: Array.from(coworkersFromScopus.values()),
+        coworkersFromPapers: coworkersList,
         studentsSupervised: studentsFromThesis,
         stats: {
             totalPapers: papersWithFaculty.length,
             uniqueCoauthors: coworkersFromScopus.size,
-            totalStudentsSupervised: studentsFromThesis.length
-        }
+            ...studentStats
+        },
+        papers: normalizedPapers,
+        coAuthors: normalizedCoAuthors,
+        publicationTimeline: normalizedTimeline
     }, "Coworkers fetched successfully", 200);
 });
 

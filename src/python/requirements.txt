@@ -1,0 +1,11 @@
+# Dependencies for the Google Scholar fallback helper (fetch_scholar.py).
+# Install with:  pip install -r src/python/requirements.txt
+#
+# RECOMMENDED backend: SerpApi (reliable, structured JSON, free tier 100/mo).
+#   -> only needs `requests`. Set SERPAPI_KEY in the backend .env.
+requests>=2.31,<3
+
+# OPTIONAL no-key fallback backend: scholarly (scrapes Google Scholar directly,
+# usually blocked by CAPTCHA without a proxy). Only needed if you do NOT set
+# SERPAPI_KEY. Uncomment to install:
+# scholarly==1.7.11
