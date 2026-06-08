@@ -171,6 +171,9 @@ const buildCoworkersFromScholar = (scholar, ownName) => {
             affiliation: paper.venue || "",
             author_id: "",
             matched_profile: null,
+            // Google Scholar paper URL — frontend uses this to make paper titles clickable.
+            link: paper.url || null,
+            document_scopus_id: null,
         };
 
         if (authors.length > 0) {
@@ -200,6 +203,8 @@ const buildCoworkersFromScholar = (scholar, ownName) => {
                 affiliation: co.affiliation || "",
                 author_id: co.scholarId || "",
                 matched_profile: null,
+                link: null,
+                document_scopus_id: null,
             };
         });
         entries.unshift(...coAuthorEntries);

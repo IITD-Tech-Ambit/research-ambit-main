@@ -933,7 +933,9 @@ directory.getFacultyCoworking = asyncErrorHandler(async (req, res) => {
                 name: author.author_name,
                 affiliation: author.author_affiliation || paper.field_associated || "External collaborator",
                 author_id: author.author_id || "",
-                matched_profile: author.matched_profile || null
+                matched_profile: author.matched_profile || null,
+                link: paper.link || null,
+                document_scopus_id: paper.document_scopus_id || null,
             });
         });
     });
