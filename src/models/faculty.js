@@ -101,5 +101,6 @@ facultySchema.index({
 // Index for frequently used non-text queries
 facultySchema.index({ department: 1 });
 facultySchema.index({ firstName: 1, lastName: 1 });
+facultySchema.index({ email: 1 });
 
 export default mongoose.model('Faculty', facultySchema);

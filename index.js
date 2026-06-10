@@ -8,6 +8,7 @@ import {
 } from "./src/middleware/errorHandler.js";
 import { successResponse } from "./src/lib/responseUtils.js";
 import db from "./src/lib/db.js";
+import { connectToRedis } from "./src/lib/redis.js";
 import router from "./src/routes/index.js";
 
 dotenv.config({ quiet: true });
@@ -41,8 +42,9 @@ app.use("/api", router);
 app.use(notFoundHandler);
 app.use(globalErrorHandler);
 
-// Connect to database
+// Connect to database and Redis
 db();
+connectToRedis();
 
 // Listen on port (Vercel handles binding differently via serverless)
 if (!process.env.VERCEL) {
