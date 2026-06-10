@@ -98,4 +98,7 @@ ResearchMetaDataScopus.index(
     { weights: { title: 10, abstract: 1 }, name: "text_search_fallback" }
 );
 
+// 6. Kerberos-based queries (faculty research summary)
+ResearchMetaDataScopus.index({ kerberos: 1, publication_year: -1 });
+
 export default mongoose.model("ResearchMetaDataScopus", ResearchMetaDataScopus);

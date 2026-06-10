@@ -5,9 +5,8 @@ import mongoose from "mongoose";
 import Faculty from "../models/faculty.js";
 import Department from "../models/departments.js";
 import research_scopus from "../models/research_scopus.js";
-import { papersMongoFilterForFaculty } from "../utils/researchFacultyLink.js";
-import phd_thesis from "../models/phd_thesis.js";
 import { getScholarResearchBlock } from "../utils/fetchScholarData.js";
+import { redisClient } from "../lib/redis.js";
 
 let directory = {};
 
@@ -225,101 +224,7 @@ const findDepartmentByReference = async (reference) => {
 
 const escapeRegex = (input = "") => input.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-const normalizeNameTokens = (value = "") =>
-    value
-        .split(/\s+/)
-        .map((token) => token.replace(/[^a-zA-Z]/g, "").trim())
-        .filter(Boolean);
 
-const buildAdvisorNameRegexes = (faculty) => {
-    const tokens = [];
-    const pushTokens = (value) => {
-        normalizeNameTokens(value).forEach((token) => {
-            if (!tokens.includes(token)) {
-                tokens.push(token);
-            }
-        });
-    };
-
-    pushTokens(faculty?.firstName);
-    pushTokens(faculty?.lastName);
-
-    if (tokens.length < 2) {
-        pushTokens(faculty?.title);
-    }
-
-    if (tokens.length < 2 && faculty?.firstName && faculty?.lastName) {
-        pushTokens(`${faculty.firstName} ${faculty.lastName}`);
-    }
-
-    if (!tokens.length && faculty?.name) {
-        pushTokens(faculty.name);
-    }
-
-    if (!tokens.length) {
-        return [];
-    }
-
-    const regexes = [];
-    const lookaheadPattern = tokens
-        .map((token) => `(?=.*\\b${escapeRegex(token)}\\b)`)
-        .join("");
-    regexes.push(new RegExp(lookaheadPattern, "i"));
-
-    if (tokens.length >= 2) {
-        const forward = tokens.map((token) => `\\b${escapeRegex(token)}\\b`).join("\\s+");
-        regexes.push(new RegExp(`^${forward}$`, "i"));
-
-        const reversed = [...tokens].reverse().map((token) => `\\b${escapeRegex(token)}\\b`).join("[\\s,]+");
-        regexes.push(new RegExp(`^${reversed}$`, "i"));
-    } else {
-        regexes.push(new RegExp(`^\\b${escapeRegex(tokens[0])}\\b$`, "i"));
-    }
-
-    return regexes;
-};
-
-const dedupeByObjectId = (documents = []) => {
-    const seen = new Set();
-    return documents.filter((doc) => {
-        const id = doc?._id?.toString?.();
-        if (!id || seen.has(id)) {
-            return false;
-        }
-        seen.add(id);
-        return true;
-    });
-};
-
-/**
- * Resolve a faculty's supervised PhD students from phd_thesis by advisor name /
- * matched profile. This is independent of the research-data source (Scopus or
- * Scholar) so both branches of getFacultyCoworking share it.
- */
-const getSupervisedStudents = async (faculty) => {
-    const advisorNameRegexes = buildAdvisorNameRegexes(faculty);
-    const departmentCode = typeof faculty.department === "string"
-        ? faculty.department
-        : faculty.department?.code;
-
-    const [thesesByProfile, thesesByName] = await Promise.all([
-        phd_thesis.find({ "contributor.advisor.matched_profile": faculty._id }).lean(),
-        advisorNameRegexes.length
-            ? phd_thesis.find({
-                ...(departmentCode ? { department_code: departmentCode } : {}),
-                $or: advisorNameRegexes.map((regex) => ({ "contributor.advisor.name": regex }))
-            }).lean()
-            : Promise.resolve([])
-    ]);
-
-    const thesesWithFaculty = dedupeByObjectId([...thesesByProfile, ...thesesByName]);
-    return thesesWithFaculty.map((thesis) => ({
-        name: thesis.contributor?.author,
-        affiliation: "IIT Delhi",
-        thesis_title: thesis.title,
-        year: thesis.publication_year || null
-    }));
-};
 
 const departmentLookupStage = {
     $lookup: {
@@ -839,176 +744,313 @@ directory.getFacultiesById = asyncErrorHandler(async (req, res) => {
     return successResponse(res, facultyResponse, "Faculty fetched successfully", 200);
 });
 
-directory.getFacultyCoworking = asyncErrorHandler(async (req, res) => {
-    const { id } = req.params;
-    if (!id) {
-        throw new BadRequestError("No id provided");
+directory.getFacultyByKerberos = asyncErrorHandler(async (req, res) => {
+    const { kerberos } = req.params;
+    if (!kerberos || !kerberos.trim()) {
+        throw new BadRequestError("Kerberos id is required");
     }
-    const faculty = await Faculty.findById(id).lean();
+    const k = kerberos.trim().toLowerCase();
+    const escaped = escapeRegex(k);
+    const faculty = await Faculty.findOne({ email: new RegExp('^' + escaped + '@', 'i') }).lean();
     if (!faculty) {
-        throw new BadRequestError("Faculty not found");
+        throw new BadRequestError("Faculty not found for this kerberos");
+    }
+
+    const department = await findDepartmentByReference(faculty.department);
+    const { kerberosIds: fkKids, expertIdToKerberos: fkE2k, expertIdToScopusIds: fkS2k } = collectKerberosInfo([faculty]);
+    const subjectMap = await buildSubjectAreaMap(fkKids, fkE2k, fkS2k);
+    const facultyResponse = formatDirectoryFaculty(faculty, subjectMap, { department });
+
+    return successResponse(res, facultyResponse, "Faculty fetched successfully", 200);
+});
+
+const CACHE_TTL_S = parseInt(process.env.FACULTY_CACHE_TTL_S) || 10800;
+
+const tryRedisGet = async (key) => {
+    try {
+        if (!redisClient?.isOpen) return null;
+        return await redisClient.get(key);
+    } catch { return null; }
+};
+
+const tryRedisSetEx = async (key, ttl, value) => {
+    try {
+        if (!redisClient?.isOpen) return;
+        await redisClient.setEx(key, ttl, value);
+    } catch { /* fail-open */ }
+};
+
+const resolveFacultyByKerberos = async (kerberos) => {
+    const escaped = escapeRegex(kerberos);
+    return Faculty.findOne({ email: new RegExp('^' + escaped + '@', 'i') }).lean();
+};
+
+const buildPapersMatch = (kerberos, scopusIds) => {
+    const clauses = [];
+    if (kerberos) clauses.push({ kerberos });
+    if (scopusIds.length) clauses.push({ "authors.author_id": { $in: scopusIds } });
+    if (!clauses.length) return { document_eid: { $in: [] } };
+    return clauses.length === 1 ? clauses[0] : { $or: clauses };
+};
+
+directory.getFacultyResearchSummary = asyncErrorHandler(async (req, res) => {
+    const { kerberos } = req.params;
+    if (!kerberos || !kerberos.trim()) {
+        throw new BadRequestError("Kerberos id is required");
+    }
+    const k = kerberos.trim().toLowerCase();
+    const yearLimit = Math.min(20, Math.max(1, parseInt(req.query.yearLimit) || 5));
+    const yearOffset = Math.max(0, parseInt(req.query.yearOffset) || 0);
+
+    const cacheKey = `summary:${k}:${yearOffset}:${yearLimit}`;
+    const cached = await tryRedisGet(cacheKey);
+    if (cached) {
+        return res.status(200).json(JSON.parse(cached));
+    }
+
+    const faculty = await resolveFacultyByKerberos(k);
+    if (!faculty) {
+        throw new BadRequestError("Faculty not found for this kerberos");
     }
 
     const displayName = [faculty.title, faculty.firstName, faculty.lastName]
-        .filter(Boolean)
-        .join(" ")
-        .replace(/\s+/g, " ")
-        .trim();
+        .filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
 
-    // PhD students are resolved by advisor name and are independent of the
-    // research-data source, so compute them once for both branches.
-    const studentsFromThesis = await getSupervisedStudents(faculty);
-    const studentStats = {
-        totalStudentsSupervised: studentsFromThesis.length
-    };
+    const scopusIds = (faculty.scopus_id || []).map(String).filter(Boolean);
 
-    const scopusIds = (faculty.scopus_id || [])
-        .map(String)
-        .filter((value) => value.trim().length > 0);
-
-    // ── Fallback: faculty has no Scopus id → use Google Scholar ──
-    // (faculty.scopus_id[0] vs faculty.google_scholar_id[0], per spec)
+    // Scholar fallback for faculty without scopus data
     if (scopusIds.length === 0) {
         const scholarBlock = await getScholarResearchBlock(faculty);
         if (scholarBlock) {
-            // Persist Scholar-derived metrics back to the Faculty document so the
-            // directory listing cards (which read stored h_index/citation_count)
-            // reflect them without a live Scholar fetch per card. Fire-and-forget:
-            // never block or fail the response on a cache-write error.
-            const nextHIndex = scholarBlock.hIndex;
-            const nextCitations = scholarBlock.citationCount;
-            if (faculty.h_index !== nextHIndex || faculty.citation_count !== nextCitations) {
-                Faculty.updateOne(
-                    { _id: faculty._id },
-                    { $set: { h_index: nextHIndex, citation_count: nextCitations } }
-                ).catch((err) =>
-                    console.error(`[scholar] failed to persist metrics for ${faculty._id}: ${err.message}`)
-                );
+            const timelineMap = new Map();
+            const scholarPapers = Array.isArray(scholarBlock.papers) ? scholarBlock.papers : [];
+            for (const p of scholarPapers) {
+                if (!p.year) continue;
+                if (!timelineMap.has(p.year)) timelineMap.set(p.year, []);
+                timelineMap.get(p.year).push(p);
             }
+            const allYears = [...timelineMap.entries()]
+                .sort((a, b) => b[0] - a[0])
+                .map(([year, papers]) => ({
+                    year,
+                    count: papers.length,
+                    papers: papers
+                        .sort((a, b) => (b.citations || 0) - (a.citations || 0))
+                        .slice(0, 3)
+                        .map((p) => ({
+                            title: p.title || "",
+                            type: p.type || "Publication",
+                            citations: p.citations || 0,
+                            link: p.url || null,
+                            document_scopus_id: null,
+                            authors: (Array.isArray(p.authors) ? p.authors : []).map((n) => ({
+                                name: typeof n === "string" ? n : n?.author_name || "",
+                                author_id: "",
+                                matched_profile: null,
+                            })),
+                        })),
+                }));
 
-            return successResponse(res, {
-                faculty: { name: displayName, _id: faculty._id },
-                source: scholarBlock.source,
-                hIndex: scholarBlock.hIndex,
-                citationCount: scholarBlock.citationCount,
-                scopusId: scholarBlock.scopusId,
-                coworkersFromPapers: scholarBlock.coworkersFromPapers,
-                studentsSupervised: studentsFromThesis,
-                stats: {
-                    totalPapers: scholarBlock.stats.totalPapers,
-                    uniqueCoauthors: scholarBlock.stats.uniqueCoauthors,
-                    ...studentStats
+            const totalYears = allYears.length;
+            const timeline = allYears.slice(yearOffset, yearOffset + yearLimit);
+
+            const payload = {
+                success: true,
+                message: "Research summary fetched successfully",
+                data: {
+                    faculty: { name: displayName, _id: faculty._id },
+                    source: "scholar",
+                    hIndex: faculty.h_index ?? scholarBlock.hIndex ?? 0,
+                    citationCount: faculty.citation_count ?? scholarBlock.citationCount ?? 0,
+                    scopusId: undefined,
+                    stats: { totalPapers: scholarPapers.length, totalYears },
+                    timeline,
+                    yearOffset,
+                    yearLimit,
                 },
-                papers: scholarBlock.papers,
-                coAuthors: scholarBlock.coAuthors,
-                publicationTimeline: scholarBlock.publicationTimeline
-            }, "Coworkers fetched successfully", 200);
-        }
-        // No Scholar id, or the Scholar fetch failed/was blocked → fall through
-        // to the Scopus/kerberos path. With no scopus_id that query can still
-        // match papers via the kerberos email link; if nothing matches the
-        // response is a safe empty analytics payload.
-    }
-
-    // ── Scopus / kerberos path (existing behavior, unchanged) ──
-    const scopusId = pickPrimaryIdentifier(faculty.scopus_id);
-    const papersWithFaculty = await research_scopus.find(
-        papersMongoFilterForFaculty(faculty)
-    ).lean();
-    const coworkersFromScopus = new Map();
-    papersWithFaculty.forEach((paper) => {
-        (paper.authors || []).forEach((author) => {
-            // Skip entries with no name at all (not useful to show).
-            if (!author?.author_name) return;
-            // Skip this faculty's own entry (matched by scopus_id or by name).
-            if (scopusId && author.author_id === scopusId) return;
-            // Dedup key: use author_id when present (Scopus), else author_name (Scholar).
-            const key = author.author_id || author.author_name;
-            if (coworkersFromScopus.has(key)) return;
-            coworkersFromScopus.set(key, {
-                title: paper.title,
-                publication_year: paper.publication_year,
-                document_type: paper.document_type,
-                subject_area: paper.subject_area || [],
-                name: author.author_name,
-                affiliation: author.author_affiliation || paper.field_associated || "External collaborator",
-                author_id: author.author_id || "",
-                matched_profile: author.matched_profile || null,
-                link: paper.link || null,
-                document_scopus_id: paper.document_scopus_id || null,
-            });
-        });
-    });
-
-    const coworkersList = Array.from(coworkersFromScopus.values());
-
-    // Normalized analytics (additive). Mirrors the Scholar payload so both
-    // sources expose an identical response structure; existing UI ignores them.
-    const normalizedPapers = papersWithFaculty.map((paper) => ({
-        title: paper.title,
-        year: paper.publication_year || null,
-        citations: paper.citation_count ?? 0,
-        type: paper.document_type || "Publication",
-        venue: paper.field_associated || "",
-        authors: (paper.authors || []).map((a) => a.author_name).filter(Boolean)
-    }));
-    const normalizedCoAuthors = coworkersList.map((c) => ({
-        name: c.name,
-        affiliation: c.affiliation,
-        scholarId: ""
-    }));
-    const timelineMap = new Map();
-    papersWithFaculty.forEach((paper) => {
-        const year = paper.publication_year;
-        if (!year) return;
-        timelineMap.set(year, (timelineMap.get(year) || 0) + 1);
-    });
-    const normalizedTimeline = [...timelineMap.entries()]
-        .sort((a, b) => b[0] - a[0])
-        .map(([year, count]) => ({ year, count }));
-
-    // Derive h_index + citation_count from papers and write back to Faculty doc
-    // so directory cards show real values without requiring a re-run of backfill.
-    if (papersWithFaculty.length > 0) {
-        const counts = papersWithFaculty.map((p) => p.citation_count ?? 0);
-        const derivedCitations = counts.reduce((s, c) => s + c, 0);
-        const sortedCounts = [...counts].sort((a, b) => b - a);
-        let derivedH = 0;
-        for (let i = 0; i < sortedCounts.length; i++) {
-            if (sortedCounts[i] >= i + 1) derivedH = i + 1;
-            else break;
-        }
-        // Only write back if stored values differ to avoid unnecessary DB writes.
-        if (faculty.h_index !== derivedH || faculty.citation_count !== derivedCitations) {
-            Faculty.updateOne(
-                { _id: faculty._id },
-                { $set: { h_index: derivedH, citation_count: derivedCitations } }
-            ).catch((err) =>
-                console.error(`[scopus] failed to persist metrics for ${faculty._id}: ${err.message}`)
-            );
+                timestamp: new Date().toISOString(),
+            };
+            await tryRedisSetEx(cacheKey, CACHE_TTL_S, JSON.stringify(payload));
+            return res.status(200).json(payload);
         }
     }
 
-    return successResponse(res, {
-        faculty: {
-            name: displayName,
-            _id: faculty._id
+    const papersMatch = buildPapersMatch(k, scopusIds);
+
+    const [aggResult] = await research_scopus.aggregate([
+        { $match: papersMatch },
+        {
+            $facet: {
+                timeline: [
+                    {
+                        $project: {
+                            title: 1,
+                            publication_year: 1,
+                            document_type: 1,
+                            citation_count: 1,
+                            link: 1,
+                            document_scopus_id: 1,
+                            "authors.author_name": 1,
+                            "authors.author_id": 1,
+                            "authors.matched_profile": 1,
+                        },
+                    },
+                    { $sort: { publication_year: -1, citation_count: -1 } },
+                    {
+                        $group: {
+                            _id: "$publication_year",
+                            count: { $sum: 1 },
+                            papers: {
+                                $push: {
+                                    title: "$title",
+                                    type: "$document_type",
+                                    citations: "$citation_count",
+                                    link: "$link",
+                                    document_scopus_id: "$document_scopus_id",
+                                    authors: "$authors",
+                                },
+                            },
+                        },
+                    },
+                    { $sort: { _id: -1 } },
+                    {
+                        $project: {
+                            _id: 0,
+                            year: "$_id",
+                            count: 1,
+                            papers: { $slice: ["$papers", 3] },
+                        },
+                    },
+                ],
+                stats: [{ $count: "totalPapers" }],
+                yearCount: [
+                    { $group: { _id: "$publication_year" } },
+                    { $count: "total" },
+                ],
+            },
         },
-        source: "scopus",
-        hIndex: faculty.h_index ?? 0,
-        citationCount: faculty.citation_count ?? 0,
-        scopusId,
-        coworkersFromPapers: coworkersList,
-        studentsSupervised: studentsFromThesis,
-        stats: {
-            totalPapers: papersWithFaculty.length,
-            uniqueCoauthors: coworkersFromScopus.size,
-            ...studentStats
+    ]);
+
+    const allTimelineYears = (aggResult?.timeline || []).filter((y) => y.year != null);
+    const totalYears = aggResult?.yearCount?.[0]?.total ?? allTimelineYears.length;
+    const paginatedYears = allTimelineYears.slice(yearOffset, yearOffset + yearLimit);
+
+    const timeline = paginatedYears.map((y) => ({
+        year: y.year,
+        count: y.count,
+        papers: (y.papers || []).map((p) => ({
+            title: p.title || "",
+            type: p.type || "Publication",
+            citations: p.citations ?? 0,
+            link: p.link || null,
+            document_scopus_id: p.document_scopus_id || null,
+            authors: (p.authors || []).map((a) => ({
+                name: a.author_name || "",
+                author_id: a.author_id || "",
+                matched_profile: a.matched_profile || null,
+            })),
+        })),
+    }));
+
+    const totalPapers = aggResult?.stats?.[0]?.totalPapers ?? 0;
+
+    const payload = {
+        success: true,
+        message: "Research summary fetched successfully",
+        data: {
+            faculty: { name: displayName, _id: faculty._id },
+            source: "scopus",
+            hIndex: faculty.h_index ?? 0,
+            citationCount: faculty.citation_count ?? 0,
+            scopusId: pickPrimaryIdentifier(faculty.scopus_id),
+            stats: { totalPapers, totalYears },
+            timeline,
+            yearOffset,
+            yearLimit,
         },
-        papers: normalizedPapers,
-        coAuthors: normalizedCoAuthors,
-        publicationTimeline: normalizedTimeline
-    }, "Coworkers fetched successfully", 200);
+        timestamp: new Date().toISOString(),
+    };
+
+    await tryRedisSetEx(cacheKey, CACHE_TTL_S, JSON.stringify(payload));
+    return res.status(200).json(payload);
+});
+
+directory.getFacultyPublications = asyncErrorHandler(async (req, res) => {
+    const { kerberos } = req.params;
+    const year = parseInt(req.query.year);
+    const skip = Math.max(0, parseInt(req.query.skip) || 0);
+    const limit = Math.min(50, Math.max(1, parseInt(req.query.limit) || 20));
+
+    if (!kerberos || !kerberos.trim()) {
+        throw new BadRequestError("Kerberos id is required");
+    }
+    if (!year || isNaN(year)) {
+        throw new BadRequestError("Valid year query param is required");
+    }
+
+    const k = kerberos.trim().toLowerCase();
+
+    const cacheKey = `pubs:${k}:${year}:${skip}:${limit}`;
+    const cached = await tryRedisGet(cacheKey);
+    if (cached) {
+        return res.status(200).json(JSON.parse(cached));
+    }
+
+    const faculty = await resolveFacultyByKerberos(k);
+    if (!faculty) {
+        throw new BadRequestError("Faculty not found for this kerberos");
+    }
+
+    const scopusIds = (faculty.scopus_id || []).map(String).filter(Boolean);
+    const papersMatch = buildPapersMatch(k, scopusIds);
+
+    const matchStage = { ...papersMatch, publication_year: year };
+
+    const [papers, countResult] = await Promise.all([
+        research_scopus.aggregate([
+            { $match: matchStage },
+            {
+                $project: {
+                    title: 1,
+                    publication_year: 1,
+                    document_type: 1,
+                    citation_count: 1,
+                    link: 1,
+                    document_scopus_id: 1,
+                    "authors.author_name": 1,
+                    "authors.author_id": 1,
+                    "authors.matched_profile": 1,
+                },
+            },
+            { $sort: { citation_count: -1 } },
+            { $skip: skip },
+            { $limit: limit },
+        ]),
+        research_scopus.countDocuments(matchStage),
+    ]);
+
+    const formattedPapers = papers.map((p) => ({
+        title: p.title || "",
+        type: p.document_type || "Publication",
+        citations: p.citation_count ?? 0,
+        link: p.link || null,
+        document_scopus_id: p.document_scopus_id || null,
+        authors: (p.authors || []).map((a) => ({
+            name: a.author_name || "",
+            author_id: a.author_id || "",
+            matched_profile: a.matched_profile || null,
+        })),
+    }));
+
+    const payload = {
+        success: true,
+        message: "Publications fetched successfully",
+        data: { year, total: countResult, papers: formattedPapers, skip, limit },
+        timestamp: new Date().toISOString(),
+    };
+
+    await tryRedisSetEx(cacheKey, CACHE_TTL_S, JSON.stringify(payload));
+    return res.status(200).json(payload);
 });
 
 
