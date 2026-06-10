@@ -7,6 +7,7 @@ const router = e.Router();
 router.get("/", directory.getAllFaculties);
 router.get("/search", directory.searchFaculties);
 router.get("/grouped", directory.getFacultiesGroupedByDepartment);
+router.get("/grouped/:departmentId/faculties", directory.getFacultiesForDepartmentGroup);
 router.get("/by-scopus/:scopusId", directory.getFacultyByScopusId);
 router.post("/by-scopus/batch", directory.resolveFacultiesByScopusIds);
 router.get("/:id", directory.getFacultiesById);
