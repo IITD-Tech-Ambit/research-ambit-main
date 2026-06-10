@@ -49,7 +49,11 @@ connectToRedis();
 // Listen on port (Vercel handles binding differently via serverless)
 if (!process.env.VERCEL) {
   app.listen(PORT, () => {
-    console.log(`Server is running on http://localhost:${PORT}`);
+    console.log(`Server is running on http://localhost:${PORT} (pid ${process.pid})`);
+    // PM2 cluster mode with wait_ready expects this signal or it will kill/restart workers.
+    if (typeof process.send === "function") {
+      process.send("ready");
+    }
   });
 }
 
