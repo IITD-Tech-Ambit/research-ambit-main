@@ -7,6 +7,7 @@ import {
   notFoundHandler,
 } from "./src/middleware/errorHandler.js";
 import { successResponse } from "./src/lib/responseUtils.js";
+import { metricsMiddleware, startMetricsServer } from "./src/middleware/metrics.js";
 import db from "./src/lib/db.js";
 import { connectToRedis } from "./src/lib/redis.js";
 import router from "./src/routes/index.js";
@@ -23,6 +24,7 @@ app.use(morgan(process.env.NODE_ENV === "production" ? "combined" : "dev", {
   skip: (req) => req.url === "/" || req.url === "/health"
 }));
 
+app.use(metricsMiddleware);
 app.use(cors());
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
@@ -48,6 +50,7 @@ connectToRedis();
 
 // Listen on port (Vercel handles binding differently via serverless)
 if (!process.env.VERCEL) {
+  startMetricsServer(console);
   app.listen(PORT, () => {
     console.log(`Server is running on http://localhost:${PORT} (pid ${process.pid})`);
     // PM2 cluster mode with wait_ready expects this signal or it will kill/restart workers.
