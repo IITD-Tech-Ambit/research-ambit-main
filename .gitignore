@@ -48,3 +48,6 @@ tmp/
 
 # Prettier cache
 .prettierrc-cache
+
+# Knowledge Graph generated JSON (rebuild via knowledge-graph/pipeline/build_kg.py)
+data/knowledge-graph/
