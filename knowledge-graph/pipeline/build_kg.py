@@ -498,6 +498,15 @@ def main():
     print(f"[build_kg]   {len(explore['terms'])} searchable terms "
           f"(themes/sub-domains/topics) -> {EXPLORE_INDEX.name}")
 
+    # 4c. Build 3D Research Atlas layout
+    print("\n[build_kg] building 3D atlas layout ...")
+    from build_atlas import build_atlas as _build_atlas_payload
+    from build_atlas import ATLAS_FILE as _ATLAS_FILE
+    atlas = _build_atlas_payload()
+    with open(_ATLAS_FILE, "w", encoding="utf-8") as f:
+        json.dump(atlas, f, ensure_ascii=False, separators=(",", ":"))
+    print(f"[build_kg]   {atlas['count']:,} papers -> {_ATLAS_FILE.name}")
+
     # 5. Summary
     total_papers = sum(i["paperCount"] for i in index)
     match_pct    = 100 * total_matched / max(total_papers, 1)
