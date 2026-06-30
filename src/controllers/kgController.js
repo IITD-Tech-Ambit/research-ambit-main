@@ -550,4 +550,101 @@ kg.searchAtlasDepartment = asyncErrorHandler(async (req, res) => {
   });
 });
 
+function atlasPaperMatchesQuery(paper, q) {
+  const query = String(q ?? "").trim().toLowerCase();
+  if (!query) return false;
+  const haystack = [paper.title, paper.theme, paper.subdomain, paper.topic]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  const tokens = query.split(/\s+/).filter((t) => t.length >= 2);
+  if (tokens.length === 0) return haystack.includes(query);
+  return tokens.every((t) => haystack.includes(t));
+}
+
+/** Theme cluster breakdown: departments + papers matching search within a broad theme. */
+kg.getAtlasClusterBreakdown = asyncErrorHandler(async (req, res) => {
+  if (!existsSync(ATLAS_FILE)) {
+    throw new NotFoundError(
+      "Atlas not found. Run knowledge-graph/pipeline/build_atlas.py first.",
+    );
+  }
+
+  const theme = String(req.query.theme ?? "").trim();
+  const q = String(req.query.q ?? "").trim();
+  const paperLimit = Math.min(Number(req.query.paperLimit) || 200, 500);
+
+  if (!theme || !q) {
+    return successResponse(res, {
+      theme,
+      query: q,
+      totalPapers: 0,
+      departments: [],
+    });
+  }
+
+  const raw = await readFile(ATLAS_FILE, "utf-8");
+  const atlas = JSON.parse(raw);
+  const deptIndex = ensureAtlasDepartmentIndex();
+
+  /** @type {Map<number, string[]>} */
+  const idxToDepts = new Map();
+  if (deptIndex) {
+    for (const [deptName, entry] of Object.entries(deptIndex)) {
+      for (const idx of entry.indices) {
+        const list = idxToDepts.get(idx) ?? [];
+        list.push(deptName);
+        idxToDepts.set(idx, list);
+      }
+    }
+  }
+
+  /** @type {Map<string, { paperCount: number; papers: object[] }>} */
+  const byDept = new Map();
+  let totalPapers = 0;
+
+  for (const paper of atlas.papers ?? []) {
+    if (paper.theme !== theme) continue;
+    if (!atlasPaperMatchesQuery(paper, q)) continue;
+    totalPapers += 1;
+
+    const deptNames = String(paper.department ?? "").trim()
+      ? [String(paper.department).trim()]
+      : (idxToDepts.get(paper.i)?.length ? idxToDepts.get(paper.i) : ["Unassigned"]);
+
+    for (const dept of deptNames) {
+      let entry = byDept.get(dept);
+      if (!entry) {
+        entry = { paperCount: 0, papers: [] };
+        byDept.set(dept, entry);
+      }
+      entry.paperCount += 1;
+      if (entry.papers.length < paperLimit) {
+        entry.papers.push({
+          id: paper.id,
+          i: paper.i,
+          title: paper.title,
+          topic: paper.topic ?? "",
+          citations: paper.citations ?? 0,
+        });
+      }
+    }
+  }
+
+  const departments = [...byDept.entries()]
+    .map(([department, entry]) => ({
+      department,
+      paperCount: entry.paperCount,
+      papers: entry.papers,
+    }))
+    .sort((a, b) => b.paperCount - a.paperCount || a.department.localeCompare(b.department));
+
+  return successResponse(res, {
+    theme,
+    query: q,
+    totalPapers,
+    departments,
+  });
+});
+
 export default kg;

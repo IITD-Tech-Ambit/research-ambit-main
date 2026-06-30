@@ -15,5 +15,6 @@ router.get("/atlas/faculty-indices", kg.getFacultyAtlasIndices);
 router.get("/atlas/faculty-search", kg.searchAtlasFaculty);
 router.get("/atlas/department-indices", kg.getDepartmentAtlasIndices);
 router.get("/atlas/department-search", kg.searchAtlasDepartment);
+router.get("/atlas/cluster-breakdown", kg.getAtlasClusterBreakdown);
 
 export default router;
