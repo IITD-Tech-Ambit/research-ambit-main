@@ -726,6 +726,65 @@ directory.resolveFacultiesByScopusIds = asyncErrorHandler(async (req, res) => {
     return successResponse(res, { matches }, "Resolved", 200);
 });
 
+/**
+ * Batch-resolve kerberos ids → IITD Faculty profiles, for pages that receive
+ * kerberos lists (e.g. taxonomy browse) and render faculty cards in one round trip.
+ * Body: { kerberosIds: string[] } (max 100)
+ * Response: { matches: { [kerberos: string]: DirectoryFaculty } }
+ * Missing ids are simply absent from the map.
+ */
+directory.resolveFacultiesByKerberos = asyncErrorHandler(async (req, res) => {
+    const raw = Array.isArray(req.body?.kerberosIds) ? req.body.kerberosIds : [];
+    const ids = [...new Set(
+        raw
+            .map((v) => (v == null ? "" : String(v).trim().toLowerCase()))
+            .filter((v) => v.length > 0)
+    )].slice(0, 100);
+
+    if (ids.length === 0) {
+        return successResponse(res, { matches: {} }, "No kerberos ids provided", 200);
+    }
+
+    const faculties = await Faculty.find({
+        email: { $in: ids.map((k) => new RegExp("^" + escapeRegex(k) + "@", "i")) }
+    }).lean();
+    if (faculties.length === 0) {
+        return successResponse(res, { matches: {} }, "No matching faculty", 200);
+    }
+
+    const deptIds = faculties
+        .map((f) => f.department)
+        .filter(Boolean)
+        .map((d) => (typeof d === "object" && d._id ? String(d._id) : String(d)))
+        .filter((id) => isPossibleObjectId(id));
+    const uniqueDeptIds = [...new Set(deptIds)];
+    const departmentDocs = uniqueDeptIds.length
+        ? await Department.find({ _id: { $in: uniqueDeptIds } }, "name code category").lean()
+        : [];
+    const departmentById = new Map(departmentDocs.map((d) => [String(d._id), d]));
+
+    const { kerberosIds, expertIdToKerberos, expertIdToScopusIds } = collectKerberosInfo(faculties);
+    const subjectMap = await buildSubjectAreaMap(kerberosIds, expertIdToKerberos, expertIdToScopusIds);
+
+    const matches = {};
+    for (const faculty of faculties) {
+        const deptRef = faculty.department;
+        let department = null;
+        if (deptRef && typeof deptRef === "object" && typeof deptRef.name === "string") {
+            department = deptRef;
+        } else if (deptRef) {
+            const key = typeof deptRef === "object" && deptRef._id ? String(deptRef._id) : String(deptRef);
+            department = departmentById.get(key) || null;
+        }
+        const kerberos = String(faculty.email || "").split("@")[0].toLowerCase();
+        if (ids.includes(kerberos)) {
+            matches[kerberos] = formatDirectoryFaculty(faculty, subjectMap, { department });
+        }
+    }
+
+    return successResponse(res, { matches }, "Resolved", 200);
+});
+
 directory.getFacultiesById = asyncErrorHandler(async (req, res) => {
     const { id } = req.params;
     if (!id) {
