@@ -101,6 +101,7 @@ def collect_papers() -> dict[str, dict]:
                 "broad_theme": node.get("broad_theme") or "",
                 "sub_domain": node.get("sub_domain") or "",
                 "topic": node.get("topic") or "",
+                "iitd_department": node.get("iitd_department") or "",
                 "citation_count": int(node.get("citation_count") or 0),
                 "year": node.get("year"),
             }
@@ -122,6 +123,7 @@ def build_atlas() -> dict:
             "theme": paper["broad_theme"],
             "subdomain": paper["sub_domain"],
             "topic": paper["topic"],
+            "department": paper.get("iitd_department") or "",
             "citations": paper["citation_count"],
             "x": x,
             "y": y,

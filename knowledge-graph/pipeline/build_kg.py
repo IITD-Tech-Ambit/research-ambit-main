@@ -303,10 +303,12 @@ def build_faculty_graph(
             broad_theme = cls["broad_theme"]
             sub_domain  = cls["sub_domain"]
             topic       = cls["topic"]
+            iitd_dept   = cls.get("iitd_dept") or ""
         else:
             broad_theme = "Unclassified"
             sub_domain  = "Unclassified"
             topic       = ""
+            iitd_dept   = ""
 
         add_node(pid, title, "paper",
                  citation_count=int(p.get("citation_count") or 0),
@@ -314,6 +316,7 @@ def build_faculty_graph(
                  broad_theme=broad_theme,
                  sub_domain=sub_domain,
                  topic=topic,
+                 iitd_department=iitd_dept,
                  link=(p.get("link") or "").strip(),
                  document_scopus_id=(p.get("document_scopus_id") or "").strip(),
                  document_eid=(p.get("document_eid") or "").strip())
