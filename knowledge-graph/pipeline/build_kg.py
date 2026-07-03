@@ -3,8 +3,9 @@ build_kg.py — Knowledge Graph builder for Research Ambit (IIT Delhi).
 
 Data sources
 ------------
-1. ResearchAmbit/classified_all_69k.xlsx   — 4-level paper classification
-     Columns: Title, Broad_Theme, IITD_Department, Sub_Domain, Topic
+1. classification/Copy of Classified_DataSheet.xlsx — 5-level classification
+     Columns: Title, Broad_Theme, IITD_Department, Domain, Sub_Domain, Topic
+     (~66,235 unique papers after deduplicating by internal paper id)
 2. MongoDB (READ-ONLY) — paper metadata: citation_count, year + faculty mapping
      Collections: researchmetadatascopus, faculties, departments
 
@@ -16,13 +17,15 @@ Node types (matching Excel column names)
   faculty   → blue     Faculty member
   paper     → green    Individual paper
   theme     → red      Broad_Theme   (Level 1, 9 values)
-  subdomain → orange   Sub_Domain    (Level 3, ~177 values)
-  topic     → yellow   Topic         (Level 4, YAKE keyphrase)
+  domain    → purple   Domain        (Level 3, ~35 values)
+  subdomain → orange   Sub_Domain    (Level 4, ~176 values)
+  topic     → yellow   Topic         (Level 5, YAKE keyphrase)
 
 Edges
 -----
   faculty  → AUTHORED      → paper
   paper    → BELONGS_TO    → theme      (Broad_Theme)
+  paper    → IN_DOMAIN     → domain     (Domain)
   paper    → IN_SUBDOMAIN  → subdomain  (Sub_Domain)
   paper    → HAS_TOPIC     → topic      (Topic)
 
@@ -31,9 +34,9 @@ Output
   output/graphs/<facultyId>.json   one graph per faculty
   output/graphs/index.json         [{facultyId, name, department, ...}]
 
-Usage (PowerShell — run from kg-prototype root)
+Usage (PowerShell — run from knowledge-graph/pipeline)
 ------
-  .venv\Scripts\python.exe -u pipeline\build_kg.py
+  python -u build_kg.py
 """
 
 from __future__ import annotations
@@ -46,6 +49,7 @@ from collections import defaultdict
 from pathlib import Path
 
 import pandas as pd
+from bson import ObjectId
 from pymongo import MongoClient
 
 # ---------------------------------------------------------------------------
@@ -53,11 +57,17 @@ from pymongo import MongoClient
 # ---------------------------------------------------------------------------
 ROOT           = Path(__file__).resolve().parent.parent          # knowledge-graph/
 PROJECT_ROOT   = ROOT.parent                                   # research-ambit-main/
-EXCEL_PAPERS   = ROOT / "classification" / "classified_all_69k.xlsx"
+EXCEL_PAPERS   = ROOT / "classification" / "Copy of Classified_DataSheet.xlsx"
 EXCEL_FACULTY  = ROOT / "classification" / "List of IITD Faculty members 2025.xlsx"
 OUTPUT_DIR     = PROJECT_ROOT / "data" / "knowledge-graph"
 GRAPHS_DIR     = OUTPUT_DIR / "graphs"
 EXPLORE_INDEX  = OUTPUT_DIR / "explore_index.json"
+
+CLASSIFICATION_COLS = [
+    "Title", "Broad_Theme", "IITD_Department", "Domain", "Sub_Domain", "Topic",
+]
+# Read from Excel for matching only — never written to graph/atlas/API output.
+_PAPER_ID_COL = "MongoDB_ID"
 
 # Load .env from project root (MONGO_URI)
 try:
@@ -89,8 +99,8 @@ def _norm(text: str | None) -> str:
 # ---------------------------------------------------------------------------
 def load_classification() -> dict[str, dict]:
     """
-    Returns  norm_title → {broad_theme, iitd_dept, sub_domain, topic}
-    Reads both 'Classified' and 'Admin_Fallback' sheets.
+    Returns  paper_id → {title, broad_theme, iitd_dept, domain, sub_domain, topic}
+    Reads all sheets; keeps one row per paper id (first row wins on duplicates).
     """
     print(f"[build_kg] reading {EXCEL_PAPERS.name} …")
     t0 = time.perf_counter()
@@ -98,26 +108,39 @@ def load_classification() -> dict[str, dict]:
     frames = []
     xl = pd.ExcelFile(EXCEL_PAPERS)
     for sheet in xl.sheet_names:
-        df = xl.parse(sheet, usecols=["Title", "Broad_Theme", "IITD_Department",
-                                       "Sub_Domain", "Topic"])
+        df = xl.parse(sheet, usecols=lambda c: c in CLASSIFICATION_COLS or c == _PAPER_ID_COL)
+        missing = [c for c in CLASSIFICATION_COLS if c not in df.columns]
+        if missing:
+            raise ValueError(f"Sheet '{sheet}' missing columns: {missing}")
+        if _PAPER_ID_COL not in df.columns:
+            raise ValueError(f"Sheet '{sheet}' missing required column: {_PAPER_ID_COL}")
         frames.append(df)
 
     combined = pd.concat(frames, ignore_index=True)
     combined.fillna("", inplace=True)
 
     mapping: dict[str, dict] = {}
+    excel_rows = len(combined)
+    skipped_dup = 0
     for _, row in combined.iterrows():
-        key = _norm(row["Title"])
-        if not key or key in mapping:
+        paper_id = str(row[_PAPER_ID_COL]).strip()
+        if not paper_id:
             continue
-        mapping[key] = {
+        if paper_id in mapping:
+            skipped_dup += 1
+            continue
+        title = str(row["Title"]).strip() or "Untitled"
+        mapping[paper_id] = {
+            "title":       title,
             "broad_theme": str(row["Broad_Theme"]).strip()     or "Unknown Theme",
             "iitd_dept":   str(row["IITD_Department"]).strip() or "Unknown Dept",
+            "domain":      str(row["Domain"]).strip()         or "Unknown Domain",
             "sub_domain":  str(row["Sub_Domain"]).strip()      or "Unknown Sub-Domain",
             "topic":       str(row["Topic"]).strip()           or "Research Topic",
         }
 
-    print(f"[build_kg]   {len(mapping):,} classified titles loaded in "
+    print(f"[build_kg]   {excel_rows:,} Excel rows -> {len(mapping):,} unique papers "
+          f"({skipped_dup:,} duplicate rows skipped) in "
           f"{time.perf_counter()-t0:.1f}s")
     return mapping
 
@@ -168,13 +191,14 @@ def _resolve_collections(client: MongoClient):
     )
 
 
-def load_mongo_data(classification: dict) -> tuple[list[dict], dict, dict]:
+def load_mongo_data(classification: dict[str, dict]) -> tuple[list[dict], dict, dict]:
     """
     Connects to MongoDB (read-only) and returns:
-      papers      — list of paper dicts with full metadata
+      papers      — one MongoDB document per unique classified paper
       scopus_map  — scopus_author_id → faculty_record
       kerb_map    — kerberos         → faculty_record
     """
+    paper_ids = set(classification.keys())
     print(f"[build_kg] connecting to MongoDB …")
     client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=10_000)
     try:
@@ -224,21 +248,33 @@ def load_mongo_data(classification: dict) -> tuple[list[dict], dict, dict]:
                   f"| {len(scopus_map)} scopus IDs  "
                   f"| {len(kerb_map)} kerberos keys")
 
-        # --- Papers (all) ---
-        # Only fetch fields needed for faculty mapping + graph metadata.
-        # Classification (Broad_Theme, Sub_Domain, Topic) comes from the Excel.
+        # --- Papers (Excel-listed only) ---
         fields = {
             "title": 1, "authors": 1,
             "citation_count": 1, "publication_year": 1,
             "kerberos": 1, "link": 1,
             "document_scopus_id": 1, "document_eid": 1,
         }
-        print(f"[build_kg]   fetching all papers from {papers_coll} …")
-        papers = []
-        for doc in db[papers_coll].find({}, fields):
-            doc["_id"] = str(doc["_id"])
-            papers.append(doc)
-        print(f"[build_kg]   {len(papers):,} papers fetched")
+        oids: list[ObjectId] = []
+        for pid in paper_ids:
+            try:
+                oids.append(ObjectId(pid))
+            except Exception:
+                pass
+
+        print(f"[build_kg]   fetching {len(oids):,} classified papers from {papers_coll} …")
+        papers: list[dict] = []
+        batch_size = 2000
+        for i in range(0, len(oids), batch_size):
+            batch = oids[i:i + batch_size]
+            for doc in db[papers_coll].find({"_id": {"$in": batch}}, fields):
+                doc["_id"] = str(doc["_id"])
+                papers.append(doc)
+
+        missing = len(paper_ids) - len(papers)
+        if missing:
+            print(f"[build_kg]   WARNING: {missing:,} classified papers not found in MongoDB")
+        print(f"[build_kg]   {len(papers):,} papers loaded from MongoDB")
 
         return papers, scopus_map, kerb_map
     finally:
@@ -295,25 +331,23 @@ def build_faculty_graph(
     matched = 0
     for p in papers:
         pid   = f"p:{p['_id']}"
-        title = (p.get("title") or "Untitled").strip()
-        cls   = classification.get(_norm(title))
+        cls   = classification.get(str(p["_id"]))
+        if not cls:
+            continue
 
-        if cls:
-            matched += 1
-            broad_theme = cls["broad_theme"]
-            sub_domain  = cls["sub_domain"]
-            topic       = cls["topic"]
-            iitd_dept   = cls.get("iitd_dept") or ""
-        else:
-            broad_theme = "Unclassified"
-            sub_domain  = "Unclassified"
-            topic       = ""
-            iitd_dept   = ""
+        matched += 1
+        title = (p.get("title") or cls.get("title") or "Untitled").strip()
+        broad_theme = cls["broad_theme"]
+        domain      = cls["domain"]
+        sub_domain  = cls["sub_domain"]
+        topic       = cls["topic"]
+        iitd_dept   = cls.get("iitd_dept") or ""
 
         add_node(pid, title, "paper",
                  citation_count=int(p.get("citation_count") or 0),
                  year=p.get("publication_year"),
                  broad_theme=broad_theme,
+                 domain=domain,
                  sub_domain=sub_domain,
                  topic=topic,
                  iitd_department=iitd_dept,
@@ -328,13 +362,19 @@ def build_faculty_graph(
             add_node(tid, broad_theme, "theme")
             edges.append({"source": pid, "target": tid, "label": "BELONGS_TO"})
 
-        # Level 3 — Sub-Domain
+        # Level 3 — Domain
+        if domain and domain not in ("Unclassified", "Unknown Domain"):
+            did = f"dom:{domain}"
+            add_node(did, domain, "domain")
+            edges.append({"source": pid, "target": did, "label": "IN_DOMAIN"})
+
+        # Level 4 — Sub-Domain
         if sub_domain and sub_domain != "Unclassified":
             sdid = f"sd:{sub_domain}"
             add_node(sdid, sub_domain, "subdomain")
             edges.append({"source": pid, "target": sdid, "label": "IN_SUBDOMAIN"})
 
-        # Level 4 — Topic (YAKE keyphrase from Excel)
+        # Level 5 — Topic (YAKE keyphrase from Excel)
         if topic:
             topid = f"topic:{topic}"
             add_node(topid, topic, "topic")
@@ -353,27 +393,20 @@ def build_explore_index(
     """
     Builds a reverse index for the Topic Explorer:
 
-        term (theme | subdomain | topic)
+        term (theme | domain | subdomain | topic)
           → departments (that have professors publishing on this term)
             → professors (faculty) with their paper counts
-
-    Output structure:
-      {
-        "terms":  [ {key, term, type, paperCount, deptCount, facultyCount} ],
-        "detail": { "<type>::<term>": { term, type, departments: [
-                      { department, paperCount, facultyCount,
-                        faculty: [ {facultyId, name, paperCount} ] } ] } }
-      }
     """
-    # nested: agg[type][term][dept][facultyId] = {name, papers}
-    from collections import defaultdict
-
-    # term -> dept -> facultyId -> {name, papers}
     def _term_tree():
         return defaultdict(lambda: defaultdict(lambda: defaultdict(
             lambda: {"name": "", "papers": 0})))
 
-    agg = {"theme": _term_tree(), "subdomain": _term_tree(), "topic": _term_tree()}
+    agg = {
+        "theme": _term_tree(),
+        "domain": _term_tree(),
+        "subdomain": _term_tree(),
+        "topic": _term_tree(),
+    }
 
     for fid, pairs in faculty_papers.items():
         faculty = pairs[0][0]
@@ -381,24 +414,24 @@ def build_explore_index(
         fname = faculty.get("name", "Unknown Faculty")
 
         for _f, p in pairs:
-            cls = classification.get(_norm((p.get("title") or "").strip()))
+            cls = classification.get(str(p["_id"]))
             if not cls:
                 continue
             pairs_to_add = [
                 ("theme",     cls["broad_theme"]),
+                ("domain",    cls["domain"]),
                 ("subdomain", cls["sub_domain"]),
                 ("topic",     cls["topic"]),
             ]
             for typ, term in pairs_to_add:
                 term = (term or "").strip()
                 if not term or term in ("Unclassified", "Research Topic", "Unknown Theme",
-                                        "Unknown Sub-Domain", "Unknown Dept"):
+                                        "Unknown Domain", "Unknown Sub-Domain", "Unknown Dept"):
                     continue
                 cell = agg[typ][term][dept][fid]
                 cell["name"] = fname
                 cell["papers"] += 1
 
-    # Flatten to output structure
     terms = []
     detail = {}
     for typ, term_map in agg.items():
@@ -432,11 +465,33 @@ def build_explore_index(
                 "facultyCount": term_faculty,
             })
 
-    # Sort terms: themes first, then by paper count (most active first)
-    type_order = {"theme": 0, "subdomain": 1, "topic": 2}
+    type_order = {"theme": 0, "domain": 1, "subdomain": 2, "topic": 3}
     terms.sort(key=lambda t: (type_order[t["type"]], -t["paperCount"]))
 
     return {"terms": terms, "detail": detail}
+
+
+def write_atlas_source(papers: list[dict], classification: dict[str, dict]) -> int:
+    """Write every Excel-listed paper for atlas (includes papers with no faculty match)."""
+    catalog = []
+    for p in papers:
+        cls = classification.get(str(p["_id"]))
+        if not cls:
+            continue
+        catalog.append({
+            "id": str(p["_id"]),
+            "title": (p.get("title") or cls.get("title") or "Untitled").strip(),
+            "broad_theme": cls["broad_theme"],
+            "domain": cls["domain"],
+            "sub_domain": cls["sub_domain"],
+            "topic": cls["topic"],
+            "iitd_department": cls.get("iitd_dept") or "",
+            "citation_count": int(p.get("citation_count") or 0),
+            "year": p.get("publication_year"),
+        })
+    with open(OUTPUT_DIR / "atlas_papers_source.json", "w", encoding="utf-8") as f:
+        json.dump(catalog, f, ensure_ascii=False)
+    return len(catalog)
 
 
 # ---------------------------------------------------------------------------
@@ -448,13 +503,19 @@ def main():
     print("Research Ambit — Knowledge Graph Builder (Excel-based)")
     print("=" * 60)
 
-    # 1. Load classification from Excel
     classification = load_classification()
 
-    # 2. Load paper metadata + faculty maps from MongoDB
+    # Remove stale faculty graphs from prior runs (atlas scans every *.json here).
+    stale = 0
+    for old_graph in GRAPHS_DIR.glob("*.json"):
+        if old_graph.name != "index.json":
+            old_graph.unlink()
+            stale += 1
+    if stale:
+        print(f"[build_kg] cleared {stale} stale faculty graph files")
+
     papers, scopus_map, kerb_map = load_mongo_data(classification)
 
-    # 3. Assign papers to faculties
     faculty_papers = assign_papers_to_faculty(papers, scopus_map, kerb_map)
     print(f"\n[build_kg] {len(faculty_papers)} faculties matched to sampled papers")
 
@@ -463,7 +524,6 @@ def main():
               "Check scopus_id / kerberos overlap.")
         sys.exit(1)
 
-    # 4. Build and save per-faculty graphs
     index = []
     total_matched = 0
 
@@ -493,24 +553,23 @@ def main():
     with open(GRAPHS_DIR / "index.json", "w", encoding="utf-8") as f:
         json.dump(index, f, ensure_ascii=False, indent=2)
 
-    # 4b. Build the reverse "explore" index (term → departments → faculty)
     print("\n[build_kg] building explore index (term -> departments -> faculty) ...")
     explore = build_explore_index(faculty_papers, classification)
     with open(EXPLORE_INDEX, "w", encoding="utf-8") as f:
         json.dump(explore, f, ensure_ascii=False)
     print(f"[build_kg]   {len(explore['terms'])} searchable terms "
-          f"(themes/sub-domains/topics) -> {EXPLORE_INDEX.name}")
+          f"(themes/domains/sub-domains/topics) -> {EXPLORE_INDEX.name}")
 
-    # 4c. Build 3D Research Atlas layout
-    print("\n[build_kg] building 3D atlas layout ...")
+    print("\n[build_kg] building 3D atlas layout (classified papers only) ...")
+    source_count = write_atlas_source(papers, classification)
+    print(f"[build_kg]   {source_count:,} classified papers -> atlas_papers_source.json")
     from build_atlas import build_atlas as _build_atlas_payload
     from build_atlas import ATLAS_FILE as _ATLAS_FILE
-    atlas = _build_atlas_payload()
+    atlas = _build_atlas_payload(classified_only=True)
     with open(_ATLAS_FILE, "w", encoding="utf-8") as f:
         json.dump(atlas, f, ensure_ascii=False, separators=(",", ":"))
     print(f"[build_kg]   {atlas['count']:,} papers -> {_ATLAS_FILE.name}")
 
-    # 5. Summary
     total_papers = sum(i["paperCount"] for i in index)
     match_pct    = 100 * total_matched / max(total_papers, 1)
     elapsed      = time.perf_counter() - t_total
@@ -518,6 +577,7 @@ def main():
     print(f"\n{'='*60}")
     print(f"DONE — {len(index)} faculty graphs | {total_papers} paper-links")
     print(f"Excel classification: {total_matched}/{total_papers} ({match_pct:.1f}%) matched")
+    print(f"Atlas papers (classified only): {atlas['count']:,}")
     print(f"Total time: {elapsed:.1f}s")
     print(f"Output: {GRAPHS_DIR}")
     print(f"{'='*60}\n")
