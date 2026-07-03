@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -186,7 +186,7 @@ kg.getExploreTerms = asyncErrorHandler(async (req, res) => {
 
   let results;
   if (!q) {
-    results = all.filter((t) => t.type === "theme" || t.type === "subdomain");
+    results = all.filter((t) => t.type === "theme" || t.type === "domain" || t.type === "subdomain");
   } else {
     results = all.filter((t) => t.term.toLowerCase().includes(q));
   }
@@ -281,18 +281,26 @@ kg.getPaperMeta = asyncErrorHandler(async (req, res) => {
 });
 
 /** Full 3D atlas payload (all paper positions + metadata). */
-kg.getAtlas = asyncErrorHandler(async (_req, res) => {
+kg.getAtlas = asyncErrorHandler(async (req, res) => {
   if (!existsSync(ATLAS_FILE)) {
     throw new NotFoundError(
       "Atlas not found. Run knowledge-graph/pipeline/build_atlas.py first.",
     );
   }
+  const resolved = path.resolve(ATLAS_FILE);
+  const stat = statSync(resolved);
+  const etag = `"${stat.mtimeMs}-${stat.size}"`;
   res.setHeader("Content-Type", "application/json; charset=utf-8");
-  res.setHeader("Cache-Control", "public, max-age=3600");
-  return res.sendFile(path.resolve(ATLAS_FILE));
+  res.setHeader("Cache-Control", "no-cache, must-revalidate");
+  res.setHeader("ETag", etag);
+  if (req.headers["if-none-match"] === etag) {
+    return res.status(304).end();
+  }
+  loadAtlasMeta();
+  return res.sendFile(resolved);
 });
 
-/** Search atlas papers by title, theme, sub-domain, or topic. */
+/** Search atlas papers by title, theme, domain, sub-domain, or topic. */
 kg.searchAtlas = asyncErrorHandler(async (req, res) => {
   if (!existsSync(ATLAS_FILE)) {
     throw new NotFoundError(
@@ -314,6 +322,7 @@ kg.searchAtlas = asyncErrorHandler(async (req, res) => {
     const haystack = [
       paper.title,
       paper.theme,
+      paper.domain,
       paper.subdomain,
       paper.topic,
     ]
@@ -553,7 +562,7 @@ kg.searchAtlasDepartment = asyncErrorHandler(async (req, res) => {
 function atlasPaperMatchesQuery(paper, q) {
   const query = String(q ?? "").trim().toLowerCase();
   if (!query) return false;
-  const haystack = [paper.title, paper.theme, paper.subdomain, paper.topic]
+  const haystack = [paper.title, paper.theme, paper.domain, paper.subdomain, paper.topic]
     .filter(Boolean)
     .join(" ")
     .toLowerCase();
@@ -624,6 +633,7 @@ kg.getAtlasClusterBreakdown = asyncErrorHandler(async (req, res) => {
           id: paper.id,
           i: paper.i,
           title: paper.title,
+          domain: paper.domain ?? "",
           topic: paper.topic ?? "",
           citations: paper.citations ?? 0,
         });

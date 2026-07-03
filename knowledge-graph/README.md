@@ -42,7 +42,11 @@ python -m venv .venv-kg
 .venv-kg\Scripts\python.exe -u knowledge-graph\pipeline\build_kg.py
 ```
 
-Uses `MONGO_URI` from `.env` (read-only). Output is written to `data/knowledge-graph/`.
+Uses `MONGO_URI` from `.env` (read-only). Classification source:
+
+`knowledge-graph/classification/Copy of Classified_DataSheet.xlsx` (~67,525 rows, Domain column included).
+
+Output is written to `data/knowledge-graph/`.
 
 ## Reclassify papers (optional)
 
