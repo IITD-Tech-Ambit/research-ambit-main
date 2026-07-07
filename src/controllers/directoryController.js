@@ -308,12 +308,16 @@ directory.getAllFaculties = asyncErrorHandler(async (req, res) => {
     };
     const sortField = sortFields[sortBy] || "h_index";
 
+    // Sort/paginate on bare Faculty docs first (index-backed), then only
+    // run the department $lookup against the page actually returned —
+    // this used to lookup+unwind the whole collection before paginating,
+    // which meant every page turned into a full collection scan+join.
     const pipeline = [
-        departmentLookupStage,
-        { $unwind: "$department" },
         { $sort: { [sortField]: sortOrder, _id: 1 } },
         { $skip: skip },
         { $limit: limit },
+        departmentLookupStage,
+        { $unwind: "$department" },
         { $project: facultyCardProjectFields }
     ];
 

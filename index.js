@@ -10,6 +10,7 @@ import { successResponse } from "./src/lib/responseUtils.js";
 import db from "./src/lib/db.js";
 import { connectToRedis } from "./src/lib/redis.js";
 import router from "./src/routes/index.js";
+import { metricsMiddleware, startMetricsServer } from "./src/lib/metrics.js";
 
 dotenv.config({ quiet: true });
 
@@ -24,6 +25,7 @@ app.use(morgan(process.env.NODE_ENV === "production" ? "combined" : "dev", {
 }));
 
 app.use(cors());
+app.use(metricsMiddleware);
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 app.use(express.static("public"));
@@ -50,6 +52,7 @@ connectToRedis();
 if (!process.env.VERCEL) {
   app.listen(PORT, () => {
     console.log(`Server is running on http://localhost:${PORT}`);
+    startMetricsServer();
   });
 }
 
