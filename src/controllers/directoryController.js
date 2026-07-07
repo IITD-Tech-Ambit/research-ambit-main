@@ -6,9 +6,37 @@ import Faculty from "../models/faculty.js";
 import Department from "../models/departments.js";
 import research_scopus from "../models/research_scopus.js";
 import { getScholarResearchBlock } from "../utils/fetchScholarData.js";
-import { redisClient } from "../lib/redis.js";
+import { ensureRedisConnected, redisClient } from "../lib/redis.js";
 
 let directory = {};
+
+const CACHE_TTL_S = parseInt(process.env.FACULTY_CACHE_TTL_S) || 10800;
+
+const tryRedisGet = async (key) => {
+    try {
+        if (!(await ensureRedisConnected())) return null;
+        return await redisClient.get(key);
+    } catch { return null; }
+};
+
+const tryRedisSetEx = async (key, ttl, value) => {
+    try {
+        if (!(await ensureRedisConnected())) return;
+        await redisClient.setEx(key, ttl, value);
+    } catch { /* fail-open */ }
+};
+
+const sendCachedJson = async (res, cacheKey, buildPayload) => {
+    const cached = await tryRedisGet(cacheKey);
+    if (cached) {
+        res.setHeader("X-Cache", "HIT");
+        return res.status(200).json(JSON.parse(cached));
+    }
+    const payload = await buildPayload();
+    await tryRedisSetEx(cacheKey, CACHE_TTL_S, JSON.stringify(payload));
+    res.setHeader("X-Cache", "MISS");
+    return res.status(200).json(payload);
+};
 
 const MAX_RESEARCH_AREAS = 8;
 
@@ -392,93 +420,115 @@ const formatGroupedFaculties = async (groupedDataRaw) => {
 };
 
 directory.getFacultiesGroupedByDepartment = asyncErrorHandler(async (req, res) => {
-    const category = req.query.category; // 'departments', 'schools', 'centres', 'researchlabs'
+    const category = String(req.query.category ?? "all").trim().toLowerCase() || "all";
     const summaryOnly = req.query.summaryOnly === "true";
+    const cacheKey = `dir:grouped:${summaryOnly ? "summary" : "full"}:${category}`;
 
-    const matchStage = buildGroupedCategoryMatch(category);
+    return sendCachedJson(res, cacheKey, async () => {
+        const matchStage = buildGroupedCategoryMatch(category === "all" ? undefined : category);
 
-    const pipeline = [
-        departmentLookupStage,
-        { $unwind: "$department" },
-        ...(Object.keys(matchStage).length > 0 ? [{ $match: matchStage }] : []),
-        ...(summaryOnly ? [] : [{ $sort: { "department.name": 1, h_index: -1 } }]),
-        {
-            $group: {
-                _id: "$department._id",
-                department: {
-                    $first: {
-                        _id: "$department._id",
-                        name: "$department.name"
-                    }
-                },
-                ...(summaryOnly
-                    ? {}
-                    : { faculties: { $push: facultyCardPushFields } }),
-                totalFaculty: { $sum: 1 },
-                ...(summaryOnly ? {} : { avgHIndex: { $avg: "$h_index" } })
-            }
-        },
-        { $sort: { "department.name": 1 } },
-        {
-            $project: summaryOnly
-                ? summaryDepartmentProjection
-                : {
-                    _id: 1,
-                    department: 1,
-                    faculties: 1,
-                    stats: {
-                        totalFaculty: "$totalFaculty",
-                        avgHIndex: { $round: ["$avgHIndex", 1] }
-                    }
+        const pipeline = [
+            departmentLookupStage,
+            { $unwind: "$department" },
+            ...(Object.keys(matchStage).length > 0 ? [{ $match: matchStage }] : []),
+            ...(summaryOnly ? [] : [{ $sort: { "department.name": 1, h_index: -1 } }]),
+            {
+                $group: {
+                    _id: "$department._id",
+                    department: {
+                        $first: {
+                            _id: "$department._id",
+                            name: "$department.name"
+                        }
+                    },
+                    ...(summaryOnly
+                        ? {}
+                        : { faculties: { $push: facultyCardPushFields } }),
+                    totalFaculty: { $sum: 1 },
+                    ...(summaryOnly ? {} : { avgHIndex: { $avg: "$h_index" } })
                 }
+            },
+            { $sort: { "department.name": 1 } },
+            {
+                $project: summaryOnly
+                    ? summaryDepartmentProjection
+                    : {
+                        _id: 1,
+                        department: 1,
+                        faculties: 1,
+                        stats: {
+                            totalFaculty: "$totalFaculty",
+                            avgHIndex: { $round: ["$avgHIndex", 1] }
+                        }
+                    }
+            }
+        ];
+
+        const groupedDataRaw = await Faculty.aggregate(pipeline);
+
+        if (summaryOnly) {
+            return {
+                success: true,
+                message: "Grouped department summary fetched successfully",
+                data: {
+                    departments: groupedDataRaw,
+                    totalDepartments: groupedDataRaw.length,
+                    totalFaculty: groupedDataRaw.reduce((sum, d) => sum + d.stats.totalFaculty, 0)
+                },
+                timestamp: new Date().toISOString(),
+            };
         }
-    ];
 
-    const groupedDataRaw = await Faculty.aggregate(pipeline);
+        const groupedData = await formatGroupedFaculties(groupedDataRaw);
 
-    if (summaryOnly) {
-        return successResponse(res, {
-            departments: groupedDataRaw,
-            totalDepartments: groupedDataRaw.length,
-            totalFaculty: groupedDataRaw.reduce((sum, d) => sum + d.stats.totalFaculty, 0)
-        }, "Grouped department summary fetched successfully", 200);
-    }
-
-    const groupedData = await formatGroupedFaculties(groupedDataRaw);
-
-    return successResponse(res, {
-        departments: groupedData,
-        totalDepartments: groupedData.length,
-        totalFaculty: groupedData.reduce((sum, d) => sum + d.stats.totalFaculty, 0)
-    }, "Grouped faculties fetched successfully", 200);
+        return {
+            success: true,
+            message: "Grouped faculties fetched successfully",
+            data: {
+                departments: groupedData,
+                totalDepartments: groupedData.length,
+                totalFaculty: groupedData.reduce((sum, d) => sum + d.stats.totalFaculty, 0)
+            },
+            timestamp: new Date().toISOString(),
+        };
+    });
 });
 
 directory.getFacultiesForDepartmentGroup = asyncErrorHandler(async (req, res) => {
     const { departmentId } = req.params;
-    const category = req.query.category;
+    const category = String(req.query.category ?? "all").trim().toLowerCase() || "all";
 
     if (!departmentId || !mongoose.Types.ObjectId.isValid(String(departmentId))) {
         throw new BadRequestError("Valid department id is required");
     }
 
-    const categoryMatch = buildGroupedCategoryMatch(category);
-    const departmentObjectId = new mongoose.Types.ObjectId(String(departmentId));
-    const facultiesRaw = await Faculty.aggregate([
-        departmentLookupStage,
-        { $unwind: "$department" },
-        { $match: { "department._id": departmentObjectId, ...categoryMatch } },
-        { $sort: { h_index: -1, _id: 1 } },
-        { $project: facultyCardProjectFields }
-    ]);
+    const cacheKey = `dir:grouped:dept:${category}:${departmentId}`;
 
-    if (facultiesRaw.length === 0) {
-        throw new BadRequestError("Department not found");
-    }
+    return sendCachedJson(res, cacheKey, async () => {
+        const categoryMatch = buildGroupedCategoryMatch(category === "all" ? undefined : category);
+        const departmentObjectId = new mongoose.Types.ObjectId(String(departmentId));
+        const facultiesRaw = await Faculty.aggregate([
+            departmentLookupStage,
+            { $unwind: "$department" },
+            { $match: { "department._id": departmentObjectId, ...categoryMatch } },
+            { $sort: { h_index: -1, _id: 1 } },
+            { $project: facultyCardProjectFields }
+        ]);
 
-    const department = normalizeDepartment(facultiesRaw[0].department);
-    const faculties = formatDirectoryFacultyCards(facultiesRaw, department);
+        if (facultiesRaw.length === 0) {
+            throw new BadRequestError("Department not found");
+        }
 
-    return successResponse(res, { faculties }, "Department faculties fetched successfully", 200);
+        const department = normalizeDepartment(facultiesRaw[0].department);
+        const faculties = formatDirectoryFacultyCards(facultiesRaw, department);
+
+        return {
+            success: true,
+            message: "Department faculties fetched successfully",
+            data: { faculties },
+            timestamp: new Date().toISOString(),
+        };
+    });
 });
 
 directory.searchFaculties = asyncErrorHandler(async (req, res) => {
@@ -826,22 +876,6 @@ directory.getFacultyByKerberos = asyncErrorHandler(async (req, res) => {
 
     return successResponse(res, facultyResponse, "Faculty fetched successfully", 200);
 });
-
-const CACHE_TTL_S = parseInt(process.env.FACULTY_CACHE_TTL_S) || 10800;
-
-const tryRedisGet = async (key) => {
-    try {
-        if (!redisClient?.isOpen) return null;
-        return await redisClient.get(key);
-    } catch { return null; }
-};
-
-const tryRedisSetEx = async (key, ttl, value) => {
-    try {
-        if (!redisClient?.isOpen) return;
-        await redisClient.setEx(key, ttl, value);
-    } catch { /* fail-open */ }
-};
 
 const resolveFacultyByKerberos = async (kerberos) => {
     const escaped = escapeRegex(kerberos);
