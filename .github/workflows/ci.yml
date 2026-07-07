@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main, prod]
+  push:
+    branches: [main, prod]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - run: npm ci
+
+      # `npm test` here is currently a stub that always fails, and prettier
+      # (`npm run lint`) has ~38 pre-existing formatting violations unrelated
+      # to any given change — neither is usable as a real gate yet. This
+      # syntax-checks every source file instead, which reliably reflects
+      # actual breakage (import errors, typos) without being blocked by
+      # existing formatting debt. Swap this for `npm test`/lint once a real
+      # test suite and a repo-wide prettier pass exist.
+      - name: Syntax check all source files
+        run: |
+          set -e
+          for f in $(find src -name "*.js") index.js; do
+            node --check "$f"
+          done
