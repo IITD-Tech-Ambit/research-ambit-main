@@ -103,4 +103,9 @@ facultySchema.index({ department: 1 });
 facultySchema.index({ firstName: 1, lastName: 1 });
 facultySchema.index({ email: 1 });
 
+// Directory listing sorts on these — without an index, getAllFaculties'
+// $sort had to scan+sort the whole collection before paginating.
+facultySchema.index({ h_index: -1, _id: 1 });
+facultySchema.index({ citation_count: -1, _id: 1 });
+
 export default mongoose.model('Faculty', facultySchema);
