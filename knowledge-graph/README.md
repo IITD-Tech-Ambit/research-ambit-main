@@ -44,7 +44,9 @@ python -m venv .venv-kg
 
 Uses `MONGO_URI` from `.env` (read-only). Classification source:
 
-`knowledge-graph/classification/Copy of Classified_DataSheet.xlsx` (~67,525 rows, Domain column included).
+`knowledge-graph/classification/Copy of Classified_DataSheet.xlsx` (~66,235 unique papers).
+
+KG API responses are cached in Redis using the same `REDIS_URL` as the rest of the backend (default TTL: 3 hours via `KG_CACHE_TTL_S`). Cache connects lazily on first request — no extra Redis setup needed beyond deploy + restart.
 
 Output is written to `data/knowledge-graph/`.
 

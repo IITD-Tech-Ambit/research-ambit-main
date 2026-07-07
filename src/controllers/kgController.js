@@ -6,6 +6,16 @@ import { fileURLToPath } from "node:url";
 import { asyncErrorHandler } from "../middleware/errorHandler.js";
 import { NotFoundError } from "../lib/customErrors.js";
 import { successResponse } from "../lib/responseUtils.js";
+import {
+  fileVersion,
+  kgCacheGet,
+  kgCacheKey,
+  kgCacheSet,
+  kgDataVersion,
+  KG_CACHE_TTL_S,
+  sendCachedSuccess,
+} from "../lib/kgCache.js";
+import { ensureRedisConnected, redisClient } from "../lib/redis.js";
 import ResearchMetaDataScopus from "../models/research_scopus.js";
 import Faculty from "../models/faculty.js";
 
@@ -26,6 +36,11 @@ const GRAPHS_DIR = path.join(KG_DATA_DIR, "graphs");
 const EXPLORE_FILE = path.join(KG_DATA_DIR, "explore_index.json");
 const ATLAS_FILE = path.join(KG_DATA_DIR, "atlas_papers.json");
 const FACULTY_INDICES_FILE = path.join(KG_DATA_DIR, "atlas_faculty_indices.json");
+const FACULTY_INDEX_FILE = path.join(GRAPHS_DIR, "index.json");
+
+function getKgVersion() {
+  return kgDataVersion([ATLAS_FILE, EXPLORE_FILE, FACULTY_INDEX_FILE]);
+}
 
 let exploreIndex = { terms: [], detail: {} };
 let atlasMeta = { ready: false, count: 0 };
@@ -148,24 +163,35 @@ async function readJsonFile(filePath) {
 const kg = {};
 
 kg.health = asyncErrorHandler(async (_req, res) => {
+  let redisConnected = false;
+  try {
+    if (await ensureRedisConnected()) {
+      await redisClient.ping();
+      redisConnected = true;
+    }
+  } catch {
+    redisConnected = false;
+  }
+
   return successResponse(res, {
-    graphsReady: existsSync(path.join(GRAPHS_DIR, "index.json")),
+    graphsReady: existsSync(FACULTY_INDEX_FILE),
     exploreReady: (exploreIndex.terms?.length ?? 0) > 0,
     atlasReady: atlasMeta.ready,
     atlasCount: atlasMeta.count,
     dataDir: KG_DATA_DIR,
+    redisConnected,
+    cacheTtlSeconds: KG_CACHE_TTL_S,
   });
 });
 
 kg.getFacultyIndex = asyncErrorHandler(async (_req, res) => {
-  const indexPath = path.join(GRAPHS_DIR, "index.json");
-  if (!existsSync(indexPath)) {
+  if (!existsSync(FACULTY_INDEX_FILE)) {
     throw new NotFoundError(
       "Faculty index not found. Run knowledge-graph/pipeline/build_kg.py first.",
     );
   }
-  const data = await readJsonFile(indexPath);
-  return successResponse(res, data);
+  const key = kgCacheKey(getKgVersion(), "faculty-index", fileVersion(FACULTY_INDEX_FILE));
+  return sendCachedSuccess(res, key, () => readJsonFile(FACULTY_INDEX_FILE));
 });
 
 kg.getFacultyGraph = asyncErrorHandler(async (req, res) => {
@@ -174,34 +200,52 @@ kg.getFacultyGraph = asyncErrorHandler(async (req, res) => {
   if (!existsSync(graphPath)) {
     throw new NotFoundError(`No knowledge graph for faculty '${id}'.`);
   }
-  const data = await readJsonFile(graphPath);
-  return successResponse(res, data);
+  const key = kgCacheKey(getKgVersion(), "faculty-graph", id, fileVersion(graphPath));
+  return sendCachedSuccess(res, key, () => readJsonFile(graphPath));
 });
 
 kg.getExploreTerms = asyncErrorHandler(async (req, res) => {
-  const all = exploreIndex.terms ?? [];
   const q = String(req.query.q ?? "").trim().toLowerCase();
   const type = String(req.query.type ?? "").trim();
   const limit = Math.min(Number(req.query.limit) || 40, 200);
+  const key = kgCacheKey(
+    getKgVersion(),
+    "explore-terms",
+    fileVersion(EXPLORE_FILE),
+    q,
+    type,
+    limit,
+  );
 
-  let results;
-  if (!q) {
-    results = all.filter((t) => t.type === "theme" || t.type === "domain" || t.type === "subdomain");
-  } else {
-    results = all.filter((t) => t.term.toLowerCase().includes(q));
-  }
-  if (type) results = results.filter((t) => t.type === type);
-
-  return successResponse(res, results.slice(0, limit));
+  return sendCachedSuccess(res, key, async () => {
+    const all = exploreIndex.terms ?? [];
+    let results;
+    if (!q) {
+      results = all.filter((t) => t.type === "theme" || t.type === "domain" || t.type === "subdomain");
+    } else {
+      results = all.filter((t) => t.term.toLowerCase().includes(q));
+    }
+    if (type) results = results.filter((t) => t.type === type);
+    return results.slice(0, limit);
+  });
 });
 
 kg.getExploreDetail = asyncErrorHandler(async (req, res) => {
-  const key = String(req.query.key ?? "");
-  const detail = exploreIndex.detail?.[key];
-  if (!detail) {
-    throw new NotFoundError(`No explore detail for key '${key}'.`);
-  }
-  return successResponse(res, detail);
+  const keyParam = String(req.query.key ?? "");
+  const cacheKey = kgCacheKey(
+    getKgVersion(),
+    "explore-detail",
+    fileVersion(EXPLORE_FILE),
+    keyParam,
+  );
+
+  return sendCachedSuccess(res, cacheKey, async () => {
+    const detail = exploreIndex.detail?.[keyParam];
+    if (!detail) {
+      throw new NotFoundError(`No explore detail for key '${keyParam}'.`);
+    }
+    return detail;
+  });
 });
 
 /** Paper metadata + full detail for Research Atlas click panel. */
@@ -210,73 +254,77 @@ kg.getPaperMeta = asyncErrorHandler(async (req, res) => {
   if (!rawId) {
     throw new NotFoundError("Invalid paper id.");
   }
-  const paper = await ResearchMetaDataScopus.findById(rawId)
-    .select(
-      "link document_scopus_id document_eid title abstract publication_year citation_count reference_count authors subject_area field_associated document_type kerberos",
-    )
-    .lean();
-  if (!paper) {
-    throw new NotFoundError(`No paper found for id '${rawId}'.`);
-  }
 
-  const authorIds = [
-    ...new Set(
-      (paper.authors ?? [])
-        .map((a) => String(a.author_id ?? "").trim())
-        .filter(Boolean),
-    ),
-  ];
-  const kerberos = String(paper.kerberos ?? "").trim().toLowerCase();
-
-  const facultyClauses = [];
-  if (authorIds.length) {
-    facultyClauses.push({ scopus_id: { $in: authorIds } });
-  }
-  if (kerberos) {
-    facultyClauses.push({
-      email: { $regex: `^${escapeRegex(kerberos)}@`, $options: "i" },
-    });
-  }
-
-  let iitdFaculty = [];
-  if (facultyClauses.length) {
-    const facDocs = await Faculty.find({ $or: facultyClauses })
-      .select("title firstName lastName email department scopus_id")
-      .populate("department", "name")
+  const key = kgCacheKey("paper-meta", rawId);
+  return sendCachedSuccess(res, key, async () => {
+    const paper = await ResearchMetaDataScopus.findById(rawId)
+      .select(
+        "link document_scopus_id document_eid title abstract publication_year citation_count reference_count authors subject_area field_associated document_type kerberos",
+      )
       .lean();
+    if (!paper) {
+      throw new NotFoundError(`No paper found for id '${rawId}'.`);
+    }
 
-    const seen = new Set();
-    for (const f of facDocs) {
-      const facultyId = String(f._id);
-      if (seen.has(facultyId)) continue;
-      seen.add(facultyId);
-      iitdFaculty.push({
-        facultyId,
-        name: [f.title, f.firstName, f.lastName].filter(Boolean).join(" ").trim(),
-        department: f.department?.name ?? "",
-        kerberos: kerberosFromEmail(f.email),
+    const authorIds = [
+      ...new Set(
+        (paper.authors ?? [])
+          .map((a) => String(a.author_id ?? "").trim())
+          .filter(Boolean),
+      ),
+    ];
+    const kerberos = String(paper.kerberos ?? "").trim().toLowerCase();
+
+    const facultyClauses = [];
+    if (authorIds.length) {
+      facultyClauses.push({ scopus_id: { $in: authorIds } });
+    }
+    if (kerberos) {
+      facultyClauses.push({
+        email: { $regex: `^${escapeRegex(kerberos)}@`, $options: "i" },
       });
     }
-  }
 
-  return successResponse(res, {
-    link: paper.link ?? "",
-    document_scopus_id: paper.document_scopus_id ?? "",
-    document_eid: paper.document_eid ?? "",
-    title: paper.title ?? "",
-    abstract: paper.abstract ?? "",
-    publication_year: paper.publication_year ?? null,
-    citation_count: paper.citation_count ?? 0,
-    reference_count: paper.reference_count ?? 0,
-    document_type: paper.document_type ?? "",
-    field_associated: paper.field_associated ?? "",
-    subject_area: paper.subject_area ?? [],
-    authors: (paper.authors ?? []).map((a) => ({
-      name: a.author_name ?? "",
-      author_id: a.author_id ?? "",
-      position: a.author_position ?? "",
-    })),
-    iitd_faculty: iitdFaculty,
+    let iitdFaculty = [];
+    if (facultyClauses.length) {
+      const facDocs = await Faculty.find({ $or: facultyClauses })
+        .select("title firstName lastName email department scopus_id")
+        .populate("department", "name")
+        .lean();
+
+      const seen = new Set();
+      for (const f of facDocs) {
+        const facultyId = String(f._id);
+        if (seen.has(facultyId)) continue;
+        seen.add(facultyId);
+        iitdFaculty.push({
+          facultyId,
+          name: [f.title, f.firstName, f.lastName].filter(Boolean).join(" ").trim(),
+          department: f.department?.name ?? "",
+          kerberos: kerberosFromEmail(f.email),
+        });
+      }
+    }
+
+    return {
+      link: paper.link ?? "",
+      document_scopus_id: paper.document_scopus_id ?? "",
+      document_eid: paper.document_eid ?? "",
+      title: paper.title ?? "",
+      abstract: paper.abstract ?? "",
+      publication_year: paper.publication_year ?? null,
+      citation_count: paper.citation_count ?? 0,
+      reference_count: paper.reference_count ?? 0,
+      document_type: paper.document_type ?? "",
+      field_associated: paper.field_associated ?? "",
+      subject_area: paper.subject_area ?? [],
+      authors: (paper.authors ?? []).map((a) => ({
+        name: a.author_name ?? "",
+        author_id: a.author_id ?? "",
+        position: a.author_position ?? "",
+      })),
+      iitd_faculty: iitdFaculty,
+    };
   });
 });
 
@@ -290,14 +338,28 @@ kg.getAtlas = asyncErrorHandler(async (req, res) => {
   const resolved = path.resolve(ATLAS_FILE);
   const stat = statSync(resolved);
   const etag = `"${stat.mtimeMs}-${stat.size}"`;
+  const cacheKey = kgCacheKey(getKgVersion(), "atlas", etag);
+
   res.setHeader("Content-Type", "application/json; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache, must-revalidate");
   res.setHeader("ETag", etag);
+
   if (req.headers["if-none-match"] === etag) {
     return res.status(304).end();
   }
+
+  const cached = await kgCacheGet(cacheKey);
+  if (cached) {
+    loadAtlasMeta();
+    res.setHeader("X-Cache", "HIT");
+    return res.send(cached);
+  }
+
+  const raw = await readFile(resolved, "utf-8");
+  await kgCacheSet(cacheKey, raw);
   loadAtlasMeta();
-  return res.sendFile(resolved);
+  res.setHeader("X-Cache", "MISS");
+  return res.send(raw);
 });
 
 /** Search atlas papers by title, theme, domain, sub-domain, or topic. */
@@ -313,36 +375,39 @@ kg.searchAtlas = asyncErrorHandler(async (req, res) => {
     return successResponse(res, { query: "", matchCount: 0, indices: [] });
   }
 
-  const raw = await readFile(ATLAS_FILE, "utf-8");
-  const atlas = JSON.parse(raw);
-  const tokens = q.split(/\s+/).filter((t) => t.length >= 2);
-  const indices = [];
+  const key = kgCacheKey(getKgVersion(), "atlas-search", fileVersion(ATLAS_FILE), q, limit);
+  return sendCachedSuccess(res, key, async () => {
+    const raw = await readFile(ATLAS_FILE, "utf-8");
+    const atlas = JSON.parse(raw);
+    const tokens = q.split(/\s+/).filter((t) => t.length >= 2);
+    const indices = [];
 
-  for (const paper of atlas.papers ?? []) {
-    const haystack = [
-      paper.title,
-      paper.theme,
-      paper.domain,
-      paper.subdomain,
-      paper.topic,
-    ]
-      .filter(Boolean)
-      .join(" ")
-      .toLowerCase();
-    const matches =
-      tokens.length === 0
-        ? haystack.includes(q)
-        : tokens.every((t) => haystack.includes(t));
-    if (matches) {
-      indices.push(paper.i);
-      if (indices.length >= limit) break;
+    for (const paper of atlas.papers ?? []) {
+      const haystack = [
+        paper.title,
+        paper.theme,
+        paper.domain,
+        paper.subdomain,
+        paper.topic,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      const matches =
+        tokens.length === 0
+          ? haystack.includes(q)
+          : tokens.every((t) => haystack.includes(t));
+      if (matches) {
+        indices.push(paper.i);
+        if (indices.length >= limit) break;
+      }
     }
-  }
 
-  return successResponse(res, {
-    query: q,
-    matchCount: indices.length,
-    indices,
+    return {
+      query: q,
+      matchCount: indices.length,
+      indices,
+    };
   });
 });
 
@@ -370,17 +435,25 @@ kg.getFacultyAtlasIndices = asyncErrorHandler(async (req, res) => {
     return successResponse(res, { facultyIds: [], matchCount: 0, indices: [] });
   }
 
-  const indices = new Set();
-  for (const id of rawIds) {
-    for (const idx of indicesMap[id] ?? []) {
-      indices.add(idx);
-    }
-  }
+  const key = kgCacheKey(
+    getKgVersion(),
+    "faculty-atlas-indices",
+    fileVersion(FACULTY_INDICES_FILE),
+    rawIds.join(","),
+  );
 
-  return successResponse(res, {
-    facultyIds: rawIds,
-    matchCount: indices.size,
-    indices: [...indices],
+  return sendCachedSuccess(res, key, async () => {
+    const indices = new Set();
+    for (const id of rawIds) {
+      for (const idx of indicesMap[id] ?? []) {
+        indices.add(idx);
+      }
+    }
+    return {
+      facultyIds: rawIds,
+      matchCount: indices.size,
+      indices: [...indices],
+    };
   });
 });
 
@@ -398,40 +471,51 @@ kg.searchAtlasFaculty = asyncErrorHandler(async (req, res) => {
     return successResponse(res, { query: "", matches: [], matchCount: 0, indices: [] });
   }
 
-  const tokens = q.split(/\s+/).filter((t) => t.length >= 2);
-  const matched = facultySearchIndex
-    .filter((f) => facultyNameMatches(f.name, q, tokens))
-    .sort((a, b) => {
-      const aName = a.name.toLowerCase();
-      const bName = b.name.toLowerCase();
-      const aExact = aName === q ? 0 : 1;
-      const bExact = bName === q ? 0 : 1;
-      if (aExact !== bExact) return aExact - bExact;
-      const aStart = aName.startsWith(q) ? 0 : 1;
-      const bStart = bName.startsWith(q) ? 0 : 1;
-      if (aStart !== bStart) return aStart - bStart;
-      return (b.paperCount ?? 0) - (a.paperCount ?? 0);
-    })
-    .slice(0, limit);
+  const key = kgCacheKey(
+    getKgVersion(),
+    "faculty-atlas-search",
+    fileVersion(FACULTY_INDICES_FILE),
+    fileVersion(FACULTY_INDEX_FILE),
+    q,
+    limit,
+  );
 
-  const indices = new Set();
-  for (const f of matched) {
-    for (const idx of indicesMap[f.facultyId] ?? []) {
-      indices.add(idx);
+  return sendCachedSuccess(res, key, async () => {
+    const tokens = q.split(/\s+/).filter((t) => t.length >= 2);
+    const matched = facultySearchIndex
+      .filter((f) => facultyNameMatches(f.name, q, tokens))
+      .sort((a, b) => {
+        const aName = a.name.toLowerCase();
+        const bName = b.name.toLowerCase();
+        const aExact = aName === q ? 0 : 1;
+        const bExact = bName === q ? 0 : 1;
+        if (aExact !== bExact) return aExact - bExact;
+        const aStart = aName.startsWith(q) ? 0 : 1;
+        const bStart = bName.startsWith(q) ? 0 : 1;
+        if (aStart !== bStart) return aStart - bStart;
+        return (b.paperCount ?? 0) - (a.paperCount ?? 0);
+      })
+      .slice(0, limit);
+
+    const indices = new Set();
+    for (const f of matched) {
+      for (const idx of indicesMap[f.facultyId] ?? []) {
+        indices.add(idx);
+      }
     }
-  }
 
-  return successResponse(res, {
-    query: q,
-    matches: matched.map((f) => ({
-      facultyId: f.facultyId,
-      name: f.name,
-      department: f.department,
-      paperCount: f.paperCount ?? 0,
-      atlasCount: (indicesMap[f.facultyId] ?? []).length,
-    })),
-    matchCount: indices.size,
-    indices: [...indices],
+    return {
+      query: q,
+      matches: matched.map((f) => ({
+        facultyId: f.facultyId,
+        name: f.name,
+        department: f.department,
+        paperCount: f.paperCount ?? 0,
+        atlasCount: (indicesMap[f.facultyId] ?? []).length,
+      })),
+      matchCount: indices.size,
+      indices: [...indices],
+    };
   });
 });
 
@@ -493,19 +577,27 @@ kg.getDepartmentAtlasIndices = asyncErrorHandler(async (req, res) => {
     return successResponse(res, { departments: [], matchCount: 0, indices: [] });
   }
 
-  const indices = new Set();
-  const resolved = [];
-  for (const name of rawNames) {
-    const entry = deptIndex[name];
-    if (!entry) continue;
-    resolved.push(name);
-    for (const idx of entry.indices) indices.add(idx);
-  }
+  const key = kgCacheKey(
+    getKgVersion(),
+    "department-atlas-indices",
+    fileVersion(FACULTY_INDICES_FILE),
+    rawNames.join("|"),
+  );
 
-  return successResponse(res, {
-    departments: resolved,
-    matchCount: indices.size,
-    indices: [...indices],
+  return sendCachedSuccess(res, key, async () => {
+    const indices = new Set();
+    const resolved = [];
+    for (const name of rawNames) {
+      const entry = deptIndex[name];
+      if (!entry) continue;
+      resolved.push(name);
+      for (const idx of entry.indices) indices.add(idx);
+    }
+    return {
+      departments: resolved,
+      matchCount: indices.size,
+      indices: [...indices],
+    };
   });
 });
 
@@ -524,38 +616,48 @@ kg.searchAtlasDepartment = asyncErrorHandler(async (req, res) => {
     return successResponse(res, { query: "", matches: [], matchCount: 0, indices: [] });
   }
 
-  const tokens = q.split(/\s+/).filter((t) => t.length >= 2);
-  const matched = Object.entries(deptIndex)
-    .filter(([name]) => departmentNameMatches(name, q, tokens))
-    .sort((a, b) => {
-      const [aName, aEntry] = a;
-      const [bName, bEntry] = b;
-      const aHay = aName.toLowerCase();
-      const bHay = bName.toLowerCase();
-      const aExact = aHay === q ? 0 : 1;
-      const bExact = bHay === q ? 0 : 1;
-      if (aExact !== bExact) return aExact - bExact;
-      const aStart = aHay.startsWith(q) ? 0 : 1;
-      const bStart = bHay.startsWith(q) ? 0 : 1;
-      if (aStart !== bStart) return aStart - bStart;
-      return bEntry.indices.length - aEntry.indices.length;
-    })
-    .slice(0, limit);
+  const key = kgCacheKey(
+    getKgVersion(),
+    "department-atlas-search",
+    fileVersion(FACULTY_INDICES_FILE),
+    q,
+    limit,
+  );
 
-  const indices = new Set();
-  for (const [, entry] of matched) {
-    for (const idx of entry.indices) indices.add(idx);
-  }
+  return sendCachedSuccess(res, key, async () => {
+    const tokens = q.split(/\s+/).filter((t) => t.length >= 2);
+    const matched = Object.entries(deptIndex)
+      .filter(([name]) => departmentNameMatches(name, q, tokens))
+      .sort((a, b) => {
+        const [aName, aEntry] = a;
+        const [bName, bEntry] = b;
+        const aHay = aName.toLowerCase();
+        const bHay = bName.toLowerCase();
+        const aExact = aHay === q ? 0 : 1;
+        const bExact = bHay === q ? 0 : 1;
+        if (aExact !== bExact) return aExact - bExact;
+        const aStart = aHay.startsWith(q) ? 0 : 1;
+        const bStart = bHay.startsWith(q) ? 0 : 1;
+        if (aStart !== bStart) return aStart - bStart;
+        return bEntry.indices.length - aEntry.indices.length;
+      })
+      .slice(0, limit);
 
-  return successResponse(res, {
-    query: q,
-    matches: matched.map(([department, entry]) => ({
-      department,
-      facultyCount: entry.facultyCount,
-      atlasCount: entry.indices.length,
-    })),
-    matchCount: indices.size,
-    indices: [...indices],
+    const indices = new Set();
+    for (const [, entry] of matched) {
+      for (const idx of entry.indices) indices.add(idx);
+    }
+
+    return {
+      query: q,
+      matches: matched.map(([department, entry]) => ({
+        department,
+        facultyCount: entry.facultyCount,
+        atlasCount: entry.indices.length,
+      })),
+      matchCount: indices.size,
+      indices: [...indices],
+    };
   });
 });
 
@@ -592,68 +694,79 @@ kg.getAtlasClusterBreakdown = asyncErrorHandler(async (req, res) => {
     });
   }
 
-  const raw = await readFile(ATLAS_FILE, "utf-8");
-  const atlas = JSON.parse(raw);
-  const deptIndex = ensureAtlasDepartmentIndex();
-
-  /** @type {Map<number, string[]>} */
-  const idxToDepts = new Map();
-  if (deptIndex) {
-    for (const [deptName, entry] of Object.entries(deptIndex)) {
-      for (const idx of entry.indices) {
-        const list = idxToDepts.get(idx) ?? [];
-        list.push(deptName);
-        idxToDepts.set(idx, list);
-      }
-    }
-  }
-
-  /** @type {Map<string, { paperCount: number; papers: object[] }>} */
-  const byDept = new Map();
-  let totalPapers = 0;
-
-  for (const paper of atlas.papers ?? []) {
-    if (paper.theme !== theme) continue;
-    if (!atlasPaperMatchesQuery(paper, q)) continue;
-    totalPapers += 1;
-
-    const deptNames = String(paper.department ?? "").trim()
-      ? [String(paper.department).trim()]
-      : (idxToDepts.get(paper.i)?.length ? idxToDepts.get(paper.i) : ["Unassigned"]);
-
-    for (const dept of deptNames) {
-      let entry = byDept.get(dept);
-      if (!entry) {
-        entry = { paperCount: 0, papers: [] };
-        byDept.set(dept, entry);
-      }
-      entry.paperCount += 1;
-      if (entry.papers.length < paperLimit) {
-        entry.papers.push({
-          id: paper.id,
-          i: paper.i,
-          title: paper.title,
-          domain: paper.domain ?? "",
-          topic: paper.topic ?? "",
-          citations: paper.citations ?? 0,
-        });
-      }
-    }
-  }
-
-  const departments = [...byDept.entries()]
-    .map(([department, entry]) => ({
-      department,
-      paperCount: entry.paperCount,
-      papers: entry.papers,
-    }))
-    .sort((a, b) => b.paperCount - a.paperCount || a.department.localeCompare(b.department));
-
-  return successResponse(res, {
+  const key = kgCacheKey(
+    getKgVersion(),
+    "cluster-breakdown",
+    fileVersion(ATLAS_FILE),
     theme,
-    query: q,
-    totalPapers,
-    departments,
+    q,
+    paperLimit,
+  );
+
+  return sendCachedSuccess(res, key, async () => {
+    const raw = await readFile(ATLAS_FILE, "utf-8");
+    const atlas = JSON.parse(raw);
+    const deptIndex = ensureAtlasDepartmentIndex();
+
+    /** @type {Map<number, string[]>} */
+    const idxToDepts = new Map();
+    if (deptIndex) {
+      for (const [deptName, entry] of Object.entries(deptIndex)) {
+        for (const idx of entry.indices) {
+          const list = idxToDepts.get(idx) ?? [];
+          list.push(deptName);
+          idxToDepts.set(idx, list);
+        }
+      }
+    }
+
+    /** @type {Map<string, { paperCount: number; papers: object[] }>} */
+    const byDept = new Map();
+    let totalPapers = 0;
+
+    for (const paper of atlas.papers ?? []) {
+      if (paper.theme !== theme) continue;
+      if (!atlasPaperMatchesQuery(paper, q)) continue;
+      totalPapers += 1;
+
+      const deptNames = String(paper.department ?? "").trim()
+        ? [String(paper.department).trim()]
+        : (idxToDepts.get(paper.i)?.length ? idxToDepts.get(paper.i) : ["Unassigned"]);
+
+      for (const dept of deptNames) {
+        let entry = byDept.get(dept);
+        if (!entry) {
+          entry = { paperCount: 0, papers: [] };
+          byDept.set(dept, entry);
+        }
+        entry.paperCount += 1;
+        if (entry.papers.length < paperLimit) {
+          entry.papers.push({
+            id: paper.id,
+            i: paper.i,
+            title: paper.title,
+            domain: paper.domain ?? "",
+            topic: paper.topic ?? "",
+            citations: paper.citations ?? 0,
+          });
+        }
+      }
+    }
+
+    const departments = [...byDept.entries()]
+      .map(([department, entry]) => ({
+        department,
+        paperCount: entry.paperCount,
+        papers: entry.papers,
+      }))
+      .sort((a, b) => b.paperCount - a.paperCount || a.department.localeCompare(b.department));
+
+    return {
+      theme,
+      query: q,
+      totalPapers,
+      departments,
+    };
   });
 });
 
