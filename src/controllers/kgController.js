@@ -62,8 +62,6 @@ function loadExploreIndex() {
   }
 }
 
-loadExploreIndex();
-
 function loadAtlasMeta() {
   if (!existsSync(ATLAS_FILE)) {
     console.warn(
@@ -80,8 +78,6 @@ function loadAtlasMeta() {
     console.error(`[kg] failed to parse atlas_papers.json: ${err.message}`);
   }
 }
-
-loadAtlasMeta();
 
 function loadAtlasFacultyIndices() {
   if (!existsSync(FACULTY_INDICES_FILE)) return;
@@ -139,8 +135,6 @@ function ensureAtlasFacultyIndices() {
   return buildAtlasFacultyIndicesFromGraphs();
 }
 
-loadAtlasFacultyIndices();
-
 let facultySearchIndex = [];
 
 function loadFacultySearchIndex() {
@@ -153,14 +147,24 @@ function loadFacultySearchIndex() {
   }
 }
 
-loadFacultySearchIndex();
-
 async function readJsonFile(filePath) {
   const raw = await readFile(filePath, "utf-8");
   return JSON.parse(raw);
 }
 
 const kg = {};
+
+/**
+ * Load the KG data files into memory. Was previously run as a side effect of
+ * merely importing this module; now an explicit step the composition root
+ * (routes/kg.js) calls once at route-registration time.
+ */
+export function initKgController() {
+  loadExploreIndex();
+  loadAtlasMeta();
+  loadAtlasFacultyIndices();
+  loadFacultySearchIndex();
+}
 
 kg.health = asyncErrorHandler(async (_req, res) => {
   let redisConnected = false;

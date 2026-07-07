@@ -12,11 +12,16 @@ import {
 import { successResponse } from "../lib/responseUtils.js";
 import { getUserId } from "../lib/userIdExtractor.js";
 import { uploadToCloudinary, deleteFromCloudinary } from "../lib/cloudinary.js";
+import { cacheGet, cacheSetEx } from "../lib/cache.js";
 
 let cms = {};
 
+const CONTENT_CACHE_TTL_S = 60;
+
 cms.getAllContent = asyncErrorHandler(async (req, res) => {
-    const content = await Content.find();
+    // Unbounded by design elsewhere in this codebase's list endpoints; capped
+    // here as a safety net since nothing calls this with pagination params.
+    const content = await Content.find().limit(500);
     if (!content) {
         throw new NotFoundError("Content not found");
     }
@@ -36,11 +41,20 @@ cms.getPaginatedContent = asyncErrorHandler(async (req, res) => {
     }
 
     // If 'mine' is true, filter by the authenticated user's ID
+    let userId = null;
     if (mine && req.headers.authorization) {
-        const userId = getUserId(req.headers.authorization);
+        userId = getUserId(req.headers.authorization);
         if (userId) {
             filter.created_by = userId;
         }
+    }
+
+    // Short TTL since content list changes on publish/edit/delete, which
+    // this cache doesn't explicitly invalidate — self-heals within a minute.
+    const cacheKey = `content:paginated:${page}:${limit}:${status || ''}:${mine ? userId || '' : ''}`;
+    const cached = await cacheGet(cacheKey);
+    if (cached) {
+        return res.status(200).json(JSON.parse(cached));
     }
 
     // Calculate skip value
@@ -57,17 +71,25 @@ cms.getPaginatedContent = asyncErrorHandler(async (req, res) => {
         .skip(skip)
         .limit(limit);
 
-    return successResponse(res, {
-        magazines: content,
-        pagination: {
-            currentPage: page,
-            totalPages,
-            totalCount,
-            limit,
-            hasNextPage: page < totalPages,
-            hasPrevPage: page > 1
-        }
-    }, "Content fetched successfully", 200);
+    const payload = {
+        success: true,
+        message: "Content fetched successfully",
+        data: {
+            magazines: content,
+            pagination: {
+                currentPage: page,
+                totalPages,
+                totalCount,
+                limit,
+                hasNextPage: page < totalPages,
+                hasPrevPage: page > 1
+            }
+        },
+        timestamp: new Date().toISOString()
+    };
+
+    await cacheSetEx(cacheKey, CONTENT_CACHE_TTL_S, JSON.stringify(payload));
+    return res.status(200).json(payload);
 });
 
 cms.getContentById = asyncErrorHandler(async (req, res) => {

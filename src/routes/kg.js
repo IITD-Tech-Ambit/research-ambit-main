@@ -1,7 +1,9 @@
 import e from "express";
-import kg from "../controllers/kgController.js";
+import kg, { initKgController } from "../controllers/kgController.js";
 
 const router = e.Router();
+
+initKgController();
 
 router.get("/health", kg.health);
 router.get("/faculty", kg.getFacultyIndex);

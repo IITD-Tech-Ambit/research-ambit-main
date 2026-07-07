@@ -48,8 +48,11 @@ const contentSchema = new mongoose.Schema(
   }
 );
 
-contentSchema.index({ status: 1 }); // Optimize status queries
-contentSchema.index({ created_by: 1 }); // Optimize user content lookups
+// getPaginatedContent filters by status and/or created_by, sorted createdAt
+// desc — trailing createdAt covers that sort instead of falling back to an
+// in-memory sort after the filtered scan.
+contentSchema.index({ status: 1, createdAt: -1 });
+contentSchema.index({ created_by: 1, createdAt: -1 });
 
 const Content = mongoose.model('Content', contentSchema);
 
