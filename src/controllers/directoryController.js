@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { asyncErrorHandler } from "../middleware/errorHandler.js";
 import { successResponse } from "../lib/responseUtils.js";
 import { BadRequestError } from "../lib/customErrors.js";
@@ -6,423 +7,207 @@ import Faculty from "../models/faculty.js";
 import Department from "../models/departments.js";
 import research_scopus from "../models/research_scopus.js";
 import { getScholarResearchBlock } from "../utils/fetchScholarData.js";
-import { redisClient } from "../lib/redis.js";
+import { cacheGet, cacheSetEx } from "../lib/cache.js";
+import {
+    pickPrimaryIdentifier,
+    normalizeDepartment,
+    buildSubjectAreaMap,
+    formatDirectoryFaculty,
+    collectKerberosInfo,
+    findDepartmentByReference,
+    isPossibleObjectId,
+    escapeRegex,
+    departmentLookupStage,
+    facultyCardProjectFields,
+    facultyCardPushFields,
+    formatDirectoryFacultyCards,
+    formatGroupedFaculties,
+    DIRECTORY_CATEGORY_MAP,
+    buildGroupedCategoryMatch
+} from "../domain/facultyDirectory.js";
 
 let directory = {};
 
-const MAX_RESEARCH_AREAS = 8;
+const CACHE_TTL_S = parseInt(process.env.FACULTY_CACHE_TTL_S) || 10800;
 
-const kerberosFromEmail = (email) => {
-    if (!email || typeof email !== 'string') return null;
-    const prefix = email.split('@')[0]?.trim().toLowerCase();
-    return prefix || null;
+const sendCachedJson = async (res, cacheKey, buildPayload) => {
+    const cached = await cacheGet(cacheKey);
+    if (cached) {
+        res.setHeader("X-Cache", "HIT");
+        return res.status(200).json(JSON.parse(cached));
+    }
+    const payload = await buildPayload();
+    await cacheSetEx(cacheKey, CACHE_TTL_S, JSON.stringify(payload));
+    res.setHeader("X-Cache", "MISS");
+    return res.status(200).json(payload);
 };
-
-const pickPrimaryIdentifier = (value) => {
-    if (Array.isArray(value)) {
-        return value.find((item) => typeof item === "string" && item.trim().length > 0) || undefined;
-    }
-    return typeof value === "string" && value.trim().length > 0 ? value : undefined;
-};
-
-const deriveDepartmentTags = (department) => {
-    const tags = ["all"];
-    if (!department?.category) {
-        return tags;
-    }
-    const category = department.category;
-    if (category === "Department") tags.push("departments");
-    else if (category === "School") tags.push("schools");
-    else if (category === "Centre") tags.push("centres");
-    else if (category === "Research Lab / Facility") tags.push("researchlabs");
-    return tags;
-};
-
-const normalizeDepartment = (department) => {
-    if (!department) return null;
-    return {
-        _id: department._id,
-        name: department.name,
-        code: department.code,
-        category: department.category
-    };
-};
-
-const buildSubjectAreaMap = async (kerberosIds = [], expertIdToKerberos = new Map(), expertIdToScopusIds = new Map()) => {
-    if (expertIdToKerberos.size === 0 && expertIdToScopusIds.size === 0) {
-        return new Map();
-    }
-
-    // Two parallel aggregations: one by kerberos, one by scopus author_id
-    const allScopusIds = [...new Set([...expertIdToScopusIds.values()].flat())];
-
-    const [kerberosCounts, scopusCounts] = await Promise.all([
-        kerberosIds.length > 0
-            ? research_scopus.aggregate([
-                { $match: { kerberos: { $in: kerberosIds } } },
-                { $unwind: { path: "$subject_area", preserveNullAndEmptyArrays: false } },
-                { $group: { _id: { kerberos: "$kerberos", subject: "$subject_area" }, count: { $sum: 1 } } }
-            ])
-            : [],
-        allScopusIds.length > 0
-            ? research_scopus.aggregate([
-                { $match: { "authors.author_id": { $in: allScopusIds } } },
-                { $unwind: { path: "$authors", preserveNullAndEmptyArrays: false } },
-                { $match: { "authors.author_id": { $in: allScopusIds } } },
-                { $unwind: { path: "$subject_area", preserveNullAndEmptyArrays: false } },
-                { $group: { _id: { authorId: "$authors.author_id", subject: "$subject_area" }, count: { $sum: 1 } } }
-            ])
-            : []
-    ]);
-
-    // Reverse maps
-    const kerberosToExpertId = new Map();
-    for (const [expertId, k] of expertIdToKerberos) kerberosToExpertId.set(k, expertId);
-    const scopusToExpertId = new Map();
-    for (const [expertId, sids] of expertIdToScopusIds) {
-        for (const sid of sids) scopusToExpertId.set(sid, expertId);
-    }
-
-    // Merge into expert_id -> subject -> count
-    const expertSubjectMap = new Map();
-    const addSubject = (expertId, subject, count) => {
-        if (!expertSubjectMap.has(expertId)) expertSubjectMap.set(expertId, new Map());
-        const subjects = expertSubjectMap.get(expertId);
-        subjects.set(subject, Math.max(subjects.get(subject) || 0, count));
-    };
-
-    for (const { _id, count } of kerberosCounts) {
-        const subject = _id?.subject?.trim();
-        if (!subject) continue;
-        const eid = kerberosToExpertId.get(_id.kerberos);
-        if (eid) addSubject(eid, subject, count);
-    }
-    for (const { _id, count } of scopusCounts) {
-        const subject = _id?.subject?.trim();
-        if (!subject) continue;
-        const eid = scopusToExpertId.get(_id.authorId);
-        if (eid) addSubject(eid, subject, count);
-    }
-
-    const subjectMap = new Map();
-    for (const [expertId, subjectCounts] of expertSubjectMap) {
-        const sorted = [...subjectCounts.entries()]
-            .sort((a, b) => b[1] - a[1])
-            .map(([subject]) => subject)
-            .slice(0, MAX_RESEARCH_AREAS);
-        subjectMap.set(expertId, sorted);
-    }
-
-    return subjectMap;
-};
-
-const mergeResearchAreas = (facultyDoc, subjectMap) => {
-    const buckets = [
-        facultyDoc.expertise,
-        facultyDoc.brief_expertise,
-        facultyDoc.subjects,
-        facultyDoc.wos_subjects,
-        subjectMap.get(facultyDoc.expert_id)
-    ];
-    const seen = new Set();
-    const ordered = [];
-    buckets.forEach((bucket) => {
-        if (!Array.isArray(bucket)) return;
-        bucket.forEach((entry) => {
-            if (typeof entry !== "string") return;
-            const cleaned = entry.trim();
-            if (!cleaned) return;
-            const key = cleaned.toLowerCase();
-            if (seen.has(key)) return;
-            seen.add(key);
-            ordered.push(cleaned);
-        });
-    });
-    return ordered.slice(0, MAX_RESEARCH_AREAS);
-};
-
-const formatDirectoryFaculty = (facultyDoc, subjectMap, overrides = {}) => {
-    if (!facultyDoc) return null;
-    const department = overrides.department || facultyDoc.department || null;
-    const nameParts = [facultyDoc.title, facultyDoc.firstName, facultyDoc.lastName].filter(Boolean);
-    const name = nameParts.join(" ").replace(/\s+/g, " ").trim();
-
-    return {
-        _id: facultyDoc._id,
-        name,
-        email: facultyDoc.email || "",
-        citationCount: facultyDoc.citation_count ?? 0,
-        hIndex: facultyDoc.h_index ?? 0,
-        research_areas: mergeResearchAreas(facultyDoc, subjectMap),
-        orcId: pickPrimaryIdentifier(facultyDoc.orcid_id),
-        scopusId: pickPrimaryIdentifier(facultyDoc.scopus_id),
-        googleScholarId: pickPrimaryIdentifier(facultyDoc.google_scholar_id),
-        department: normalizeDepartment(department),
-        tags: deriveDepartmentTags(department),
-        profileImageUrl: facultyDoc.profile_image_url || null,
-        designation: facultyDoc.designation || null,
-        workingFromYear: typeof facultyDoc.working_from_year === "number" ? facultyDoc.working_from_year : null
-    };
-};
-
-/**
- * Collect kerberos IDs, scopus IDs, and build expert_id mappings
- * for use with buildSubjectAreaMap (dual kerberos + scopus strategy).
- */
-const collectKerberosInfo = (faculties = []) => {
-    const kerberosIds = [];
-    const expertIdToKerberos = new Map();
-    const expertIdToScopusIds = new Map();
-    const seen = new Set();
-    faculties.forEach((faculty) => {
-        const k = kerberosFromEmail(faculty?.email);
-        if (k && !seen.has(k)) {
-            seen.add(k);
-            kerberosIds.push(k);
-        }
-        if (faculty?.expert_id) {
-            if (k) expertIdToKerberos.set(faculty.expert_id, k);
-            const sids = (faculty?.scopus_id || []).map(String).filter(Boolean);
-            if (sids.length > 0) expertIdToScopusIds.set(faculty.expert_id, sids);
-        }
-    });
-    return { kerberosIds, expertIdToKerberos, expertIdToScopusIds };
-};
-
-const isPossibleObjectId = (value) => typeof value === "string" && /^[0-9a-fA-F]{24}$/.test(value);
-
-const findDepartmentByReference = async (reference) => {
-    if (!reference) return null;
-    // Populated / aggregated department document
-    if (typeof reference === "object" && typeof reference.name === "string") {
-        return reference;
-    }
-    if (typeof reference === "string") {
-        const byCode = await Department.findOne({ code: reference }, "name code category").lean();
-        if (byCode) return byCode;
-        if (isPossibleObjectId(reference)) {
-            return Department.findById(reference, "name code category").lean();
-        }
-        return null;
-    }
-    if (typeof reference === "object" && reference._id != null) {
-        const innerId = String(reference._id);
-        if (isPossibleObjectId(innerId)) {
-            const dept = await Department.findById(innerId, "name code category").lean();
-            if (dept) return dept;
-        }
-    }
-    // Bare ObjectId from Faculty.findOne().lean() (no ._id property on the id itself)
-    if (typeof reference === "object" && typeof reference.toString === "function") {
-        const asStr = String(reference);
-        if (isPossibleObjectId(asStr)) {
-            return Department.findById(asStr, "name code category").lean();
-        }
-    }
-    return null;
-};
-
-const escapeRegex = (input = "") => input.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-
-
-
-const departmentLookupStage = {
-    $lookup: {
-        from: "departments",
-        let: {
-            departmentRef: "$department",
-            departmentRefStr: { $toString: "$department" }
-        },
-        pipeline: [
-            {
-                $match: {
-                    $expr: {
-                        $or: [
-                            { $eq: ["$code", "$$departmentRef"] },
-                            { $eq: ["$code", "$$departmentRefStr"] },
-                            { $eq: [{ $toString: "$_id" }, "$$departmentRefStr"] }
-                        ]
-                    }
-                }
-            }
-        ],
-        as: "department"
-    }
-};
-
-const EMPTY_SUBJECT_MAP = new Map();
-
-const facultyCardProjectFields = {
-    _id: 1,
-    title: 1,
-    firstName: 1,
-    lastName: 1,
-    email: 1,
-    citation_count: 1,
-    h_index: 1,
-    expertise: 1,
-    brief_expertise: 1,
-    subjects: 1,
-    wos_subjects: 1,
-    profile_image_url: 1,
-    designation: 1,
-    "department._id": 1,
-    "department.name": 1,
-    "department.code": 1
-};
-
-const formatDirectoryFacultyCards = (facultyDocs = [], departmentOverride = null) =>
-    facultyDocs.map((facultyDoc) => {
-        const formatted = formatDirectoryFaculty(
-            facultyDoc,
-            EMPTY_SUBJECT_MAP,
-            { department: departmentOverride || facultyDoc.department }
-        );
-        return {
-            _id: formatted._id,
-            name: formatted.name,
-            email: formatted.email,
-            citationCount: formatted.citationCount,
-            hIndex: formatted.hIndex,
-            research_areas: formatted.research_areas,
-            department: formatted.department,
-            profileImageUrl: formatted.profileImageUrl,
-            designation: formatted.designation
-        };
-    });
 
 directory.getAllFaculties = asyncErrorHandler(async (req, res) => {
     const page = Math.max(1, parseInt(req.query.page) || 1);
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 9));
-    const skip = (page - 1) * limit;
     const sortBy = req.query.sortBy || "h_index";
-    const sortOrder = req.query.order === "asc" ? 1 : -1;
+    const order = req.query.order === "asc" ? "asc" : "desc";
 
-    const sortFields = {
-        name: "firstName",
-        h_index: "h_index",
-        hIndex: "h_index",
-        citations: "citation_count",
-        citation_count: "citation_count",
-        citationCount: "citation_count"
-    };
-    const sortField = sortFields[sortBy] || "h_index";
+    const cacheKey = `dir:list:${page}:${limit}:${sortBy}:${order}`;
 
-    // Sort/paginate on bare Faculty docs first (index-backed), then only
-    // run the department $lookup against the page actually returned —
-    // this used to lookup+unwind the whole collection before paginating,
-    // which meant every page turned into a full collection scan+join.
-    const pipeline = [
-        { $sort: { [sortField]: sortOrder, _id: 1 } },
-        { $skip: skip },
-        { $limit: limit },
-        departmentLookupStage,
-        { $unwind: "$department" },
-        { $project: facultyCardProjectFields }
-    ];
+    return sendCachedJson(res, cacheKey, async () => {
+        const skip = (page - 1) * limit;
+        const sortOrder = order === "asc" ? 1 : -1;
 
-    const [facultiesRaw, total] = await Promise.all([
-        Faculty.aggregate(pipeline),
-        Faculty.countDocuments()
-    ]);
+        const sortFields = {
+            name: "firstName",
+            h_index: "h_index",
+            hIndex: "h_index",
+            citations: "citation_count",
+            citation_count: "citation_count",
+            citationCount: "citation_count"
+        };
+        const sortField = sortFields[sortBy] || "h_index";
 
-    const faculties = formatDirectoryFacultyCards(facultiesRaw);
+        // Sort/paginate on bare Faculty docs first (index-backed), then only
+        // run the department $lookup against the page actually returned —
+        // this used to lookup+unwind the whole collection before paginating,
+        // which meant every page turned into a full collection scan+join.
+        const pipeline = [
+            { $sort: { [sortField]: sortOrder, _id: 1 } },
+            { $skip: skip },
+            { $limit: limit },
+            departmentLookupStage,
+            { $unwind: "$department" },
+            { $project: facultyCardProjectFields }
+        ];
 
-    const totalPages = Math.ceil(total / limit);
+        const [facultiesRaw, total] = await Promise.all([
+            Faculty.aggregate(pipeline),
+            Faculty.countDocuments()
+        ]);
 
-    return successResponse(res, {
-        data: faculties,
-        pagination: {
-            page,
-            limit,
-            total,
-            totalPages,
-            hasNext: page < totalPages,
-            hasPrev: page > 1
-        }
-    }, "Faculties fetched successfully", 200);
+        const faculties = formatDirectoryFacultyCards(facultiesRaw);
+
+        const totalPages = Math.ceil(total / limit);
+
+        return {
+            success: true,
+            message: "Faculties fetched successfully",
+            data: {
+                data: faculties,
+                pagination: {
+                    page,
+                    limit,
+                    total,
+                    totalPages,
+                    hasNext: page < totalPages,
+                    hasPrev: page > 1
+                }
+            },
+            timestamp: new Date().toISOString(),
+        };
+    });
 });
 
-const DIRECTORY_CATEGORY_MAP = {
-    departments: "Department",
-    schools: "School",
-    centres: "Centre",
-    researchlabs: "Research Lab / Facility"
-};
-
-const buildGroupedCategoryMatch = (category) => {
-    const dbCategory = category && DIRECTORY_CATEGORY_MAP[category];
-    return dbCategory ? { "department.category": dbCategory } : {};
-};
-
-const summaryDepartmentProjection = {
-    _id: 1,
-    department: {
-        _id: "$department._id",
-        name: "$department.name"
-    },
-    stats: {
-        totalFaculty: "$totalFaculty"
-    }
-};
-
-const facultyCardPushFields = {
-    _id: "$_id",
-    title: "$title",
-    firstName: "$firstName",
-    lastName: "$lastName",
-    email: "$email",
-    citation_count: "$citation_count",
-    h_index: "$h_index",
-    expertise: "$expertise",
-    brief_expertise: "$brief_expertise",
-    subjects: "$subjects",
-    wos_subjects: "$wos_subjects",
-    profile_image_url: "$profile_image_url",
-    designation: "$designation"
-};
-
-const formatGroupedFaculties = async (groupedDataRaw) => {
-    return groupedDataRaw.map((dept) => ({
-        _id: dept._id,
-        department: dept.department,
-        stats: dept.stats,
-        faculties: formatDirectoryFacultyCards(dept.faculties || [], dept.department)
-    }));
-};
-
 directory.getFacultiesGroupedByDepartment = asyncErrorHandler(async (req, res) => {
-    const category = req.query.category; // 'departments', 'schools', 'centres', 'researchlabs'
+    const category = String(req.query.category ?? "all").trim().toLowerCase() || "all";
     const summaryOnly = req.query.summaryOnly === "true";
+    const cacheKey = `dir:grouped:${summaryOnly ? "summary" : "full"}:${category}`;
 
-    const matchStage = buildGroupedCategoryMatch(category);
+    return sendCachedJson(res, cacheKey, async () => {
+        if (summaryOnly) {
+            // Group on the raw, unjoined `department` field first — a single cheap
+            // pass over Faculty with no department join — then resolve only the
+            // handful of distinct department references that came back (not all
+            // 1,040 faculty rows) to their documents. Avoids the O(n×m) lookup+
+            // unwind the non-summary path below needs for per-faculty fields.
+            const rawGroups = await Faculty.aggregate([
+                { $group: { _id: "$department", totalFaculty: { $sum: 1 } } }
+            ]);
 
-    const pipeline = [
-        departmentLookupStage,
-        { $unwind: "$department" },
-        ...(Object.keys(matchStage).length > 0 ? [{ $match: matchStage }] : []),
-        ...(summaryOnly ? [] : [{ $sort: { "department.name": 1, h_index: -1 } }]),
-        {
-            $group: {
-                _id: "$department._id",
-                department: {
-                    $first: {
-                        _id: "$department._id",
-                        name: "$department.name"
-                    }
-                },
-                ...(summaryOnly
-                    ? {}
-                    : { faculties: { $push: facultyCardPushFields } }),
-                totalFaculty: { $sum: 1 },
-                ...(summaryOnly ? {} : { avgHIndex: { $avg: "$h_index" } })
+            const resolved = await Promise.all(
+                rawGroups.map(async (g) => ({
+                    totalFaculty: g.totalFaculty,
+                    department: await findDepartmentByReference(g._id)
+                }))
+            );
+
+            const categoryFilter = category !== "all" && DIRECTORY_CATEGORY_MAP[category];
+            const merged = new Map();
+            for (const { department, totalFaculty } of resolved) {
+                if (!department) continue;
+                if (categoryFilter && department.category !== categoryFilter) continue;
+                const key = String(department._id);
+                const existing = merged.get(key);
+                if (existing) {
+                    existing.stats.totalFaculty += totalFaculty;
+                } else {
+                    merged.set(key, {
+                        _id: department._id,
+                        department: { _id: department._id, name: department.name },
+                        stats: { totalFaculty }
+                    });
+                }
             }
-        },
-        { $sort: { "department.name": 1 } },
-        {
-            $project: summaryOnly
-                ? summaryDepartmentProjection
-                : {
+
+            const departments = [...merged.values()].sort((a, b) =>
+                a.department.name.localeCompare(b.department.name)
+            );
+
+            return {
+                success: true,
+                message: "Grouped department summary fetched successfully",
+                data: {
+                    departments,
+                    totalDepartments: departments.length,
+                    totalFaculty: departments.reduce((sum, d) => sum + d.stats.totalFaculty, 0)
+                },
+                timestamp: new Date().toISOString(),
+            };
+        }
+
+        // When filtering by category, resolve which departments match first (a
+        // handful of docs, cheap) and match Faculty rows against them on the
+        // indexed `department` field before joining — instead of joining the
+        // whole Faculty collection and filtering on department.category after.
+        const categoryDbValue = category !== "all" && DIRECTORY_CATEGORY_MAP[category];
+        let preMatchStage = null;
+        if (categoryDbValue) {
+            const matchedDepartments = await Department.find({ category: categoryDbValue }, "_id code").lean();
+            const values = [];
+            for (const d of matchedDepartments) {
+                values.push(d._id, String(d._id));
+                if (d.code) values.push(d.code);
+            }
+            if (values.length === 0) {
+                return {
+                    success: true,
+                    message: "Grouped faculties fetched successfully",
+                    data: { departments: [], totalDepartments: 0, totalFaculty: 0 },
+                    timestamp: new Date().toISOString(),
+                };
+            }
+            preMatchStage = { $match: { department: { $in: values } } };
+        }
+
+        const pipeline = [
+            ...(preMatchStage ? [preMatchStage] : []),
+            departmentLookupStage,
+            { $unwind: "$department" },
+            { $sort: { "department.name": 1, h_index: -1 } },
+            {
+                $group: {
+                    _id: "$department._id",
+                    department: {
+                        $first: {
+                            _id: "$department._id",
+                            name: "$department.name"
+                        }
+                    },
+                    faculties: { $push: facultyCardPushFields },
+                    totalFaculty: { $sum: 1 },
+                    avgHIndex: { $avg: "$h_index" }
+                }
+            },
+            { $sort: { "department.name": 1 } },
+            {
+                $project: {
                     _id: 1,
                     department: 1,
                     faculties: 1,
@@ -431,55 +216,90 @@ directory.getFacultiesGroupedByDepartment = asyncErrorHandler(async (req, res) =
                         avgHIndex: { $round: ["$avgHIndex", 1] }
                     }
                 }
-        }
-    ];
+            }
+        ];
 
-    const groupedDataRaw = await Faculty.aggregate(pipeline);
+        const groupedDataRaw = await Faculty.aggregate(pipeline);
+        const groupedData = await formatGroupedFaculties(groupedDataRaw);
 
-    if (summaryOnly) {
-        return successResponse(res, {
-            departments: groupedDataRaw,
-            totalDepartments: groupedDataRaw.length,
-            totalFaculty: groupedDataRaw.reduce((sum, d) => sum + d.stats.totalFaculty, 0)
-        }, "Grouped department summary fetched successfully", 200);
-    }
-
-    const groupedData = await formatGroupedFaculties(groupedDataRaw);
-
-    return successResponse(res, {
-        departments: groupedData,
-        totalDepartments: groupedData.length,
-        totalFaculty: groupedData.reduce((sum, d) => sum + d.stats.totalFaculty, 0)
-    }, "Grouped faculties fetched successfully", 200);
+        return {
+            success: true,
+            message: "Grouped faculties fetched successfully",
+            data: {
+                departments: groupedData,
+                totalDepartments: groupedData.length,
+                totalFaculty: groupedData.reduce((sum, d) => sum + d.stats.totalFaculty, 0)
+            },
+            timestamp: new Date().toISOString(),
+        };
+    });
 });
 
 directory.getFacultiesForDepartmentGroup = asyncErrorHandler(async (req, res) => {
     const { departmentId } = req.params;
-    const category = req.query.category;
+    const category = String(req.query.category ?? "all").trim().toLowerCase() || "all";
 
     if (!departmentId || !mongoose.Types.ObjectId.isValid(String(departmentId))) {
         throw new BadRequestError("Valid department id is required");
     }
 
-    const categoryMatch = buildGroupedCategoryMatch(category);
-    const departmentObjectId = new mongoose.Types.ObjectId(String(departmentId));
-    const facultiesRaw = await Faculty.aggregate([
-        departmentLookupStage,
-        { $unwind: "$department" },
-        { $match: { "department._id": departmentObjectId, ...categoryMatch } },
-        { $sort: { h_index: -1, _id: 1 } },
-        { $project: facultyCardProjectFields }
-    ]);
+    const cacheKey = `dir:grouped:dept:${category}:${departmentId}`;
 
-    if (facultiesRaw.length === 0) {
-        throw new BadRequestError("Department not found");
-    }
+    return sendCachedJson(res, cacheKey, async () => {
+        const departmentObjectId = new mongoose.Types.ObjectId(String(departmentId));
+        const department = await Department.findById(departmentObjectId, "name code category").lean();
+        if (!department) {
+            throw new BadRequestError("Department not found");
+        }
+        const categoryMatch = buildGroupedCategoryMatch(category === "all" ? undefined : category);
+        if (categoryMatch["department.category"] && categoryMatch["department.category"] !== department.category) {
+            throw new BadRequestError("Department not found");
+        }
 
-    const department = normalizeDepartment(facultiesRaw[0].department);
-    const faculties = formatDirectoryFacultyCards(facultiesRaw, department);
+        // Faculty.department is declared as an ObjectId, but some rows were
+        // inserted with the department's code or its stringified id instead (the
+        // same inconsistency departmentLookupStage's $expr works around) — match
+        // all three forms directly against the indexed `department` field
+        // instead of joining the whole collection first and filtering after.
+        const departmentMatchClauses = [
+            { department: departmentObjectId },
+            { department: String(departmentObjectId) }
+        ];
+        if (department.code) departmentMatchClauses.push({ department: department.code });
 
-    return successResponse(res, { faculties }, "Department faculties fetched successfully", 200);
+        const facultiesRaw = await Faculty.aggregate([
+            { $match: { $or: departmentMatchClauses } },
+            { $sort: { h_index: -1, _id: 1 } },
+            { $project: facultyCardProjectFields }
+        ]);
+
+        if (facultiesRaw.length === 0) {
+            throw new BadRequestError("Department not found");
+        }
+
+        const normalizedDepartment = normalizeDepartment(department);
+        const faculties = formatDirectoryFacultyCards(facultiesRaw, normalizedDepartment);
+
+        return {
+            success: true,
+            message: "Department faculties fetched successfully",
+            data: { faculties },
+            timestamp: new Date().toISOString(),
+        };
+    });
 });
+
+// Batch-resolve endpoints are keyed by an arbitrary id set — hash the sorted,
+// deduped ids so the cache key stays bounded regardless of batch size.
+const batchCacheKey = (prefix, ids) => {
+    const hash = crypto.createHash("sha256").update([...ids].sort().join(",")).digest("hex").slice(0, 16);
+    return `dir:${prefix}:${hash}`;
+};
+
+// Short TTL relative to CACHE_TTL_S: search is keyed by free-typed query text,
+// so cardinality is much higher than the other cached endpoints here — a long
+// TTL would let Redis accumulate a huge number of rarely-reused keys.
+const SEARCH_CACHE_TTL_S = 300;
 
 directory.searchFaculties = asyncErrorHandler(async (req, res) => {
     const { q } = req.query;
@@ -502,6 +322,12 @@ directory.searchFaculties = asyncErrorHandler(async (req, res) => {
             departments: [],
             total: 0
         }, "Search query too short", 200);
+    }
+
+    const cacheKey = `dir:search:${tokens.join(" ")}:${limit}`;
+    const cached = await cacheGet(cacheKey);
+    if (cached) {
+        return res.status(200).json(JSON.parse(cached));
     }
 
     // 2. Build per-token $and conditions on concatenated fullName
@@ -532,9 +358,10 @@ directory.searchFaculties = asyncErrorHandler(async (req, res) => {
     };
 
     // 4. Primary search: token-based $and regex on fullName
+    // Match/score/sort/limit on bare Faculty docs first, then only run the
+    // department $lookup against the page actually returned — this used to
+    // join+unwind the whole collection before narrowing down to `limit` hits.
     const primaryPipeline = [
-        departmentLookupStage,
-        { $unwind: "$department" },
         {
             $addFields: {
                 fullName: {
@@ -564,6 +391,8 @@ directory.searchFaculties = asyncErrorHandler(async (req, res) => {
         },
         { $sort: { relevanceScore: -1, h_index: -1 } },
         { $limit: limit },
+        departmentLookupStage,
+        { $unwind: "$department" },
         {
             $project: {
                 _id: 1,
@@ -605,13 +434,16 @@ directory.searchFaculties = asyncErrorHandler(async (req, res) => {
 
     // 6. Fallback: if no regex results, try $text search for typo tolerance
     if (facultiesRaw.length === 0) {
+        // Same reordering as the primary pipeline: $text already narrows to
+        // matching docs via its own index, so sort/limit before joining
+        // department instead of after.
         const textSearchPipeline = [
             { $match: { $text: { $search: q.trim() } } },
             { $addFields: { relevanceScore: { $meta: "textScore" } } },
-            departmentLookupStage,
-            { $unwind: "$department" },
             { $sort: { relevanceScore: -1, h_index: -1 } },
             { $limit: limit },
+            departmentLookupStage,
+            { $unwind: "$department" },
             {
                 $project: {
                     _id: 1,
@@ -645,11 +477,19 @@ directory.searchFaculties = asyncErrorHandler(async (req, res) => {
     const subjectMap = await buildSubjectAreaMap(sKids, sE2k, sS2k);
     const faculties = facultiesRaw.map((faculty) => formatDirectoryFaculty(faculty, subjectMap));
 
-    return successResponse(res, {
-        faculties,
-        departments,
-        total: faculties.length + departments.length
-    }, "Search completed", 200);
+    const payload = {
+        success: true,
+        message: "Search completed",
+        data: {
+            faculties,
+            departments,
+            total: faculties.length + departments.length
+        },
+        timestamp: new Date().toISOString(),
+    };
+
+    await cacheSetEx(cacheKey, SEARCH_CACHE_TTL_S, JSON.stringify(payload));
+    return res.status(200).json(payload);
 });
 
 directory.getFacultyByScopusId = asyncErrorHandler(async (req, res) => {
@@ -687,6 +527,12 @@ directory.resolveFacultiesByScopusIds = asyncErrorHandler(async (req, res) => {
 
     if (ids.length === 0) {
         return successResponse(res, { matches: {} }, "No Scopus ids provided", 200);
+    }
+
+    const cacheKey = batchCacheKey("by-scopus", ids);
+    const cached = await cacheGet(cacheKey);
+    if (cached) {
+        return res.status(200).json(JSON.parse(cached));
     }
 
     const faculties = await Faculty.find({ scopus_id: { $in: ids } }).lean();
@@ -727,7 +573,9 @@ directory.resolveFacultiesByScopusIds = asyncErrorHandler(async (req, res) => {
         }
     }
 
-    return successResponse(res, { matches }, "Resolved", 200);
+    const payload = { success: true, message: "Resolved", data: { matches }, timestamp: new Date().toISOString() };
+    await cacheSetEx(cacheKey, CACHE_TTL_S, JSON.stringify(payload));
+    return res.status(200).json(payload);
 });
 
 /**
@@ -747,6 +595,12 @@ directory.resolveFacultiesByKerberos = asyncErrorHandler(async (req, res) => {
 
     if (ids.length === 0) {
         return successResponse(res, { matches: {} }, "No kerberos ids provided", 200);
+    }
+
+    const cacheKey = batchCacheKey("by-kerberos", ids);
+    const cached = await cacheGet(cacheKey);
+    if (cached) {
+        return res.status(200).json(JSON.parse(cached));
     }
 
     const faculties = await Faculty.find({
@@ -786,7 +640,9 @@ directory.resolveFacultiesByKerberos = asyncErrorHandler(async (req, res) => {
         }
     }
 
-    return successResponse(res, { matches }, "Resolved", 200);
+    const payload = { success: true, message: "Resolved", data: { matches }, timestamp: new Date().toISOString() };
+    await cacheSetEx(cacheKey, CACHE_TTL_S, JSON.stringify(payload));
+    return res.status(200).json(payload);
 });
 
 directory.getFacultiesById = asyncErrorHandler(async (req, res) => {
@@ -813,35 +669,28 @@ directory.getFacultyByKerberos = asyncErrorHandler(async (req, res) => {
         throw new BadRequestError("Kerberos id is required");
     }
     const k = kerberos.trim().toLowerCase();
-    const escaped = escapeRegex(k);
-    const faculty = await Faculty.findOne({ email: new RegExp('^' + escaped + '@', 'i') }).lean();
-    if (!faculty) {
-        throw new BadRequestError("Faculty not found for this kerberos");
-    }
+    const cacheKey = `dir:faculty:kerberos:${k}`;
 
-    const department = await findDepartmentByReference(faculty.department);
-    const { kerberosIds: fkKids, expertIdToKerberos: fkE2k, expertIdToScopusIds: fkS2k } = collectKerberosInfo([faculty]);
-    const subjectMap = await buildSubjectAreaMap(fkKids, fkE2k, fkS2k);
-    const facultyResponse = formatDirectoryFaculty(faculty, subjectMap, { department });
+    return sendCachedJson(res, cacheKey, async () => {
+        const escaped = escapeRegex(k);
+        const faculty = await Faculty.findOne({ email: new RegExp('^' + escaped + '@', 'i') }).lean();
+        if (!faculty) {
+            throw new BadRequestError("Faculty not found for this kerberos");
+        }
 
-    return successResponse(res, facultyResponse, "Faculty fetched successfully", 200);
+        const department = await findDepartmentByReference(faculty.department);
+        const { kerberosIds: fkKids, expertIdToKerberos: fkE2k, expertIdToScopusIds: fkS2k } = collectKerberosInfo([faculty]);
+        const subjectMap = await buildSubjectAreaMap(fkKids, fkE2k, fkS2k);
+        const facultyResponse = formatDirectoryFaculty(faculty, subjectMap, { department });
+
+        return {
+            success: true,
+            message: "Faculty fetched successfully",
+            data: facultyResponse,
+            timestamp: new Date().toISOString(),
+        };
+    });
 });
-
-const CACHE_TTL_S = parseInt(process.env.FACULTY_CACHE_TTL_S) || 10800;
-
-const tryRedisGet = async (key) => {
-    try {
-        if (!redisClient?.isOpen) return null;
-        return await redisClient.get(key);
-    } catch { return null; }
-};
-
-const tryRedisSetEx = async (key, ttl, value) => {
-    try {
-        if (!redisClient?.isOpen) return;
-        await redisClient.setEx(key, ttl, value);
-    } catch { /* fail-open */ }
-};
 
 const resolveFacultyByKerberos = async (kerberos) => {
     const escaped = escapeRegex(kerberos);
@@ -866,7 +715,7 @@ directory.getFacultyResearchSummary = asyncErrorHandler(async (req, res) => {
     const yearOffset = Math.max(0, parseInt(req.query.yearOffset) || 0);
 
     const cacheKey = `summary:${k}:${yearOffset}:${yearLimit}`;
-    const cached = await tryRedisGet(cacheKey);
+    const cached = await cacheGet(cacheKey);
     if (cached) {
         return res.status(200).json(JSON.parse(cached));
     }
@@ -933,7 +782,7 @@ directory.getFacultyResearchSummary = asyncErrorHandler(async (req, res) => {
                 },
                 timestamp: new Date().toISOString(),
             };
-            await tryRedisSetEx(cacheKey, CACHE_TTL_S, JSON.stringify(payload));
+            await cacheSetEx(cacheKey, CACHE_TTL_S, JSON.stringify(payload));
             return res.status(200).json(payload);
         }
     }
@@ -1034,7 +883,7 @@ directory.getFacultyResearchSummary = asyncErrorHandler(async (req, res) => {
         timestamp: new Date().toISOString(),
     };
 
-    await tryRedisSetEx(cacheKey, CACHE_TTL_S, JSON.stringify(payload));
+    await cacheSetEx(cacheKey, CACHE_TTL_S, JSON.stringify(payload));
     return res.status(200).json(payload);
 });
 
@@ -1054,7 +903,7 @@ directory.getFacultyPublications = asyncErrorHandler(async (req, res) => {
     const k = kerberos.trim().toLowerCase();
 
     const cacheKey = `pubs:${k}:${year}:${skip}:${limit}`;
-    const cached = await tryRedisGet(cacheKey);
+    const cached = await cacheGet(cacheKey);
     if (cached) {
         return res.status(200).json(JSON.parse(cached));
     }
@@ -1112,7 +961,7 @@ directory.getFacultyPublications = asyncErrorHandler(async (req, res) => {
         timestamp: new Date().toISOString(),
     };
 
-    await tryRedisSetEx(cacheKey, CACHE_TTL_S, JSON.stringify(payload));
+    await cacheSetEx(cacheKey, CACHE_TTL_S, JSON.stringify(payload));
     return res.status(200).json(payload);
 });
 

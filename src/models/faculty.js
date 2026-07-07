@@ -103,6 +103,11 @@ facultySchema.index({ department: 1 });
 facultySchema.index({ firstName: 1, lastName: 1 });
 facultySchema.index({ email: 1 });
 
+// search-api (opensearch service) does $in lookups on scopus_id on every
+// search-result hydration — was previously unindexed, forcing a collection
+// scan on Faculty's hottest read path from that service.
+facultySchema.index({ scopus_id: 1 });
+
 // Directory listing sorts on these — without an index, getAllFaculties'
 // $sort had to scan+sort the whole collection before paginating.
 facultySchema.index({ h_index: -1, _id: 1 });

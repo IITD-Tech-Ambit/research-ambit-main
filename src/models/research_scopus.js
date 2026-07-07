@@ -83,8 +83,9 @@ ResearchMetaDataScopus.index({
     document_type: 1
 });
 
-// 2. Author-based queries
-ResearchMetaDataScopus.index({ "authors.author_id": 1 });
+// 2. Author-based queries (faculty publications: match authors.author_id +
+// publication_year, sort citation_count — getFacultyPublications)
+ResearchMetaDataScopus.index({ "authors.author_id": 1, publication_year: -1, citation_count: -1 });
 
 // 3. Subject area filtering
 ResearchMetaDataScopus.index({ subject_area: 1, publication_year: -1 });
@@ -98,7 +99,9 @@ ResearchMetaDataScopus.index(
     { weights: { title: 10, abstract: 1 }, name: "text_search_fallback" }
 );
 
-// 6. Kerberos-based queries (faculty research summary)
-ResearchMetaDataScopus.index({ kerberos: 1, publication_year: -1 });
+// 6. Kerberos-based queries (faculty research summary / publications) — the
+// trailing citation_count also covers getFacultyPublications' sort, not
+// just the year-grouping in getFacultyResearchSummary.
+ResearchMetaDataScopus.index({ kerberos: 1, publication_year: -1, citation_count: -1 });
 
 export default mongoose.model("ResearchMetaDataScopus", ResearchMetaDataScopus);

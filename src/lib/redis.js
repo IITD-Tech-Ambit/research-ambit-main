@@ -13,6 +13,9 @@ export const redisClient = createClient({
 
 /** @type {Promise<boolean> | null} */
 let connectPromise = null;
+/** Skip reconnect attempts briefly after a failed connect (avoids ~1–2s delay per request in local dev). */
+let redisUnavailableUntil = 0;
+const REDIS_RETRY_COOLDOWN_MS = 30_000;
 
 redisClient.on("connect", () => {
   console.log("Connected to Redis!");
@@ -29,14 +32,17 @@ redisClient.on("error", (err) => {
 /** Connect on demand (safe for serverless cold starts and early KG requests). */
 export async function ensureRedisConnected() {
   if (redisClient.isOpen) return true;
+  if (Date.now() < redisUnavailableUntil) return false;
   if (!connectPromise) {
     connectPromise = (async () => {
       try {
         await redisClient.connect();
         console.log("Successfully connected to Redis");
+        redisUnavailableUntil = 0;
         return true;
       } catch (err) {
         connectPromise = null;
+        redisUnavailableUntil = Date.now() + REDIS_RETRY_COOLDOWN_MS;
         console.error("Error connecting to Redis:", err);
         return false;
       }
