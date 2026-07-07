@@ -1,14 +1,12 @@
 import e from "express";
 import userRouter from "./user.js";
 import contentRouter from "./content.js";
-import mindMapRouter from "./mindMap.js";
 import directoryRouter from "./directory.js";
 import suggestionRouter from "./suggestion.js";
 import kgRouter from "./kg.js";
 const router = e.Router();
 router.use("/user", userRouter);
 router.use("/content", contentRouter);
-router.use("/mind-map", mindMapRouter);
 router.use("/directory", directoryRouter);
 router.use("/suggestions", suggestionRouter);
 router.use("/kg", kgRouter);
