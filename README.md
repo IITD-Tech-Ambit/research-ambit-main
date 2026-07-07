@@ -1,6 +1,6 @@
 # Research Ambit — Backend API
 
-Express.js backend for Research Ambit at IIT Delhi. It serves the faculty directory, CMS, knowledge-graph explorer, research atlas, and user feedback APIs consumed by the [tech-ambit-explorer](https://github.com/IITD-Tech-Ambit/tech-ambit-explorer) frontend.
+Express.js backend for Research Ambit at IIT Delhi. It serves the faculty directory, CMS, knowledge-graph explorer, research atlas, and user feedback APIs consumed by the [Research Ambit portal](https://researchambit.iitd.ac.in/) ([tech-ambit-explorer](https://github.com/IITD-Tech-Ambit/tech-ambit-explorer)).
 
 **API reference:** [Postman documentation](https://documenter.getpostman.com/view/32690520/2sB3dPTWfN)
 
