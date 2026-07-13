@@ -61,9 +61,9 @@ const analyticsSchema = new mongoose.Schema(
   }
 );
 
-analyticsSchema.index({ 'likes.user': 1, 'likes.ip_address': 1 }); // Optimize lookups
-analyticsSchema.index({ 'comments.created_by': 1 }); // Optimize comment user lookups
-analyticsSchema.index({ 'comments.ip_address': 1 }); // Optimize comment IP lookups
+analyticsSchema.index({ 'likes.user': 1, 'likes.ip_address': 1 });
+analyticsSchema.index({ 'comments.created_by': 1 });
+analyticsSchema.index({ 'comments.ip_address': 1 });
 
 const Analytics = mongoose.model('Analytics', analyticsSchema);
 

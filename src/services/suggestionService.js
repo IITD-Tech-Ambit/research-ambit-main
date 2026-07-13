@@ -28,7 +28,6 @@ export const createSuggestion = async ({ name, email, category, message, screens
     }
 
     if (errors.length > 0) {
-        // Clean up temp file if validation fails
         if (screenshotPath) fs.existsSync(screenshotPath) && fs.unlinkSync(screenshotPath);
         throw new ValidationError('Validation failed', errors);
     }
