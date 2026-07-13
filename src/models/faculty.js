@@ -1,7 +1,6 @@
 import mongoose from 'mongoose'
 
 const facultySchema = new mongoose.Schema({
-    //Unique Identifiers...
     expert_id:{
         type:String,
         required:true,
@@ -15,7 +14,6 @@ const facultySchema = new mongoose.Schema({
     qualification_id:{
         type:String,
     },
-    //Personal Info...
     title:{
         type:String,
         required:true
@@ -45,7 +43,6 @@ const facultySchema = new mongoose.Schema({
     profile_image_url:{
         type:String,
     },
-    //Professional Info...
     designation:{
         type:String,
     },
@@ -68,8 +65,6 @@ const facultySchema = new mongoose.Schema({
     expertise:[String],
     brief_expertise:[String],
     subjects:[String],
-
-    //Research Identifiers...
     orcid_id:[String],
     researcher_id:[String],
     google_scholar_id:[String],
@@ -78,7 +73,6 @@ const facultySchema = new mongoose.Schema({
     timestamps: true
 });
 
-// Create text index for full-text search capabilities across multiple string fields
 facultySchema.index({ 
     firstName: 'text', 
     lastName: 'text', 
@@ -98,7 +92,6 @@ facultySchema.index({
     }
 });
 
-// Index for frequently used non-text queries
 facultySchema.index({ department: 1 });
 facultySchema.index({ firstName: 1, lastName: 1 });
 facultySchema.index({ email: 1 });

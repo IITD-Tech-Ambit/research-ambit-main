@@ -21,6 +21,15 @@ RUN npm ci --only=production
 # Copy source code
 COPY . .
 
+# Proto contracts for the directory.v1 gRPC listener. This service builds from
+# its own context, so it carries a committed copy under protos/ (seeded by the
+# workspace protos/sync.sh). PROTO_DIR mirrors api-gateway/search-api so the
+# loader resolves the same tree in the image.
+COPY protos /app/protos
+ENV PROTO_DIR=/app/protos
+ENV GRPC_BIND_ADDRESS=0.0.0.0:50055
+ENV GRPC_ENABLED=true
+
 # Create non-root user
 RUN addgroup -g 1001 -S nodejs && \
     adduser -S nodejs -u 1001 && \
@@ -28,7 +37,8 @@ RUN addgroup -g 1001 -S nodejs && \
 
 USER nodejs
 
-EXPOSE 3002
+# 3002 = REST/HTTP (edge + /health healthcheck); 50055 = directory.v1 gRPC mesh
+EXPOSE 3002 50055
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \

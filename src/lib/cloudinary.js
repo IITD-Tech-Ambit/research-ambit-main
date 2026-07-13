@@ -14,18 +14,15 @@ const uploadToCloudinary = async (localFilePath, folder) => {
     try {
         if (!localFilePath) return null;
 
-        // Upload the file on cloudinary
         const response = await cloudinary.uploader.upload(localFilePath, {
             resource_type: "auto",
             folder: folder
         });
 
-        // file has been uploaded successfull
-        // console.log("file is uploaded on cloudinary ", response.url);
         fs.unlinkSync(localFilePath);
         return response.url;
     } catch (error) {
-        fs.unlinkSync(localFilePath); // remove the locally saved temporary file as the upload operation got failed
+        fs.unlinkSync(localFilePath);
         return null;
     }
 }
@@ -34,7 +31,6 @@ const deleteFromCloudinary = async (imageUrl) => {
     try {
         if (!imageUrl) return null;
 
-        // Extract publicId from url
         // URL format: https://res.cloudinary.com/cloud_name/image/upload/v12345678/folder/filename.extension
         const regex = /\/upload\/(?:v\d+\/)?(.+)\.[^.]+$/;
         const match = imageUrl.match(regex);
@@ -45,8 +41,6 @@ const deleteFromCloudinary = async (imageUrl) => {
         }
 
         const publicId = match[1];
-
-        // Delete the file from cloudinary
         const response = await cloudinary.uploader.destroy(publicId);
         return response;
     } catch (error) {

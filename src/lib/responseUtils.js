@@ -1,14 +1,3 @@
-/**
- * Utility functions for standardized API responses
- */
-
-/**
- * Send success response
- * @param {Object} res - Express response object
- * @param {*} data - Response data
- * @param {string} message - Success message
- * @param {number} statusCode - HTTP status code (default: 200)
- */
 const successResponse = (
   res,
   data = null,
@@ -23,13 +12,6 @@ const successResponse = (
   });
 };
 
-/**
- * Send error response
- * @param {Object} res - Express response object
- * @param {string} message - Error message
- * @param {number} statusCode - HTTP status code (default: 500)
- * @param {*} errors - Additional error details
- */
 const errorResponse = (
   res,
   message = "Internal Server Error",
@@ -44,12 +26,6 @@ const errorResponse = (
   });
 };
 
-/**
- * Send validation error response
- * @param {Object} res - Express response object
- * @param {Array} validationErrors - Array of validation errors
- * @param {string} message - Error message
- */
 const validationErrorResponse = (
   res,
   validationErrors,
@@ -63,11 +39,6 @@ const validationErrorResponse = (
   });
 };
 
-/**
- * Send not found response
- * @param {Object} res - Express response object
- * @param {string} message - Not found message
- */
 const notFoundResponse = (res, message = "Resource not found") => {
   return res.status(404).json({
     success: false,
@@ -76,11 +47,6 @@ const notFoundResponse = (res, message = "Resource not found") => {
   });
 };
 
-/**
- * Send unauthorized response
- * @param {Object} res - Express response object
- * @param {string} message - Unauthorized message
- */
 const unauthorizedResponse = (res, message = "Unauthorized access") => {
   return res.status(401).json({
     success: false,
@@ -89,11 +55,6 @@ const unauthorizedResponse = (res, message = "Unauthorized access") => {
   });
 };
 
-/**
- * Send forbidden response
- * @param {Object} res - Express response object
- * @param {string} message - Forbidden message
- */
 const forbiddenResponse = (res, message = "Access forbidden") => {
   return res.status(403).json({
     success: false,
