@@ -127,7 +127,6 @@ const run = async () => {
     if (ONLY_STATS) console.log('  📊 ONLY-STATS mode — updating h_index & citations only');
     console.log('');
 
-    // Load input file
     if (!fs.existsSync(inputFile)) {
         err(`Input file not found: ${inputFile}`);
         err(`Create the file and fill in your faculty data.`);
@@ -146,18 +145,15 @@ const run = async () => {
     log(`Loaded ${records.length} records from ${path.basename(inputFile)}`);
     console.log('');
 
-    // Connect
     await mongoose.connect(process.env.MONGO_URI);
     ok('Database connected\n');
 
     const { Faculty, Department } = await loadModels();
     const deptCache = new Map();
 
-    // Counters
     let created = 0, updated = 0, skipped = 0, failed = 0;
     const failedRecords = [];
 
-    // Process in batches of 100
     const BATCH = 100;
     for (let i = 0; i < records.length; i += BATCH) {
         const batch = records.slice(i, i + BATCH);
@@ -169,10 +165,8 @@ const run = async () => {
             const idx = i + j + 1;
             const label = `[${idx}] ${record.firstName || '?'} ${record.lastName || ''} (${record.expert_id || 'NO-ID'})`;
 
-            // Validate
             const issues = validate(record, idx);
 
-            // Find existing
             const existing = record.expert_id
                 ? await Faculty.findOne({ expert_id: record.expert_id })
                 : null;
@@ -185,7 +179,6 @@ const run = async () => {
                 continue;
             }
 
-            // Resolve department
             const deptId = await resolveDepartment(
                 Department,
                 deptCache,
@@ -207,7 +200,6 @@ const run = async () => {
                 }
 
                 if (existing) {
-                    // Update — only set fields present in the payload
                     await Faculty.updateOne(
                         { expert_id: record.expert_id },
                         { $set: payload }
@@ -239,7 +231,6 @@ const run = async () => {
         console.log('');
     }
 
-    // Summary
     console.log('╔══════════════════════════════════════════════╗');
     console.log('║                   Summary                    ║');
     console.log('╠══════════════════════════════════════════════╣');
@@ -258,7 +249,6 @@ const run = async () => {
         });
     }
 
-    // Write failure log
     if (failedRecords.length > 0 && !DRY_RUN) {
         const logPath = path.join(__dirname, '../../data/upsert-errors.json');
         fs.writeFileSync(logPath, JSON.stringify(failedRecords, null, 2));

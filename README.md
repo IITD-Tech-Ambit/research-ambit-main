@@ -1,6 +1,6 @@
 # Research Ambit — Backend API
 
-Express.js backend for Research Ambit at IIT Delhi. It serves the faculty directory, CMS, knowledge-graph explorer, research atlas, and user feedback APIs consumed by the [Research Ambit portal](https://researchambit.iitd.ac.in/) ([tech-ambit-explorer](https://github.com/IITD-Tech-Ambit/tech-ambit-explorer)).
+Express.js backend for Research Ambit at IIT Delhi. It serves the faculty directory, CMS, Atlas, and user feedback APIs consumed by the [Research Ambit portal](https://researchambit.iitd.ac.in/) ([tech-ambit-explorer](https://github.com/IITD-Tech-Ambit/tech-ambit-explorer)).
 
 **API reference:** [Postman documentation](https://documenter.getpostman.com/view/32690520/2sB3dPTWfN)
 
@@ -21,14 +21,14 @@ Shared data stores: MongoDB · Redis · OpenSearch
 | Module | Route prefix | Purpose |
 |--------|--------------|---------|
 | Faculty directory | `/api/directory` | Browse, search, and filter ~1,000+ faculty; profiles, publications, Scopus/Kerberos lookups |
-| Knowledge graph | `/api/kg` | Per-faculty graphs, topic explorer, research atlas search and cluster breakdown |
+| Atlas | `/api/kg` | Per-faculty graphs, topic explorer, Atlas search and cluster breakdown |
 | CMS | `/api/content` | Articles and announcements with likes, comments, and moderation |
 | Users | `/api/user` | Registration, login (JWT), profile management |
 | Suggestions | `/api/suggestions` | User feedback submissions with optional screenshots |
 
-Knowledge-graph data is generated offline by `knowledge-graph/pipeline/build_kg.py` from classified Scopus papers and MongoDB metadata, then **published straight into MongoDB** (octree LOD atlas tiles + faculty graphs + explore/index docs). The runtime no longer reads the filesystem — the research atlas streams octree tiles by viewport instead of shipping one ~27 MB JSON. See [Knowledge-graph data (MongoDB)](#knowledge-graph-data-mongodb).
+Atlas data is generated offline by `knowledge-graph/pipeline/build_kg.py` from classified Scopus papers and MongoDB metadata, then **published straight into MongoDB** (octree LOD atlas tiles + faculty graphs + explore/index docs). The runtime no longer reads the filesystem — Atlas streams octree tiles by viewport instead of shipping one ~27 MB JSON. See [Atlas data (MongoDB)](#atlas-data-mongodb).
 
-### Knowledge-graph data (MongoDB)
+### Atlas data (MongoDB)
 
 All KG data lives in MongoDB, versioned by an immutable build hash with an `atlas_meta` `active` pointer flipped atomically at the end of a build:
 
@@ -37,7 +37,7 @@ All KG data lives in MongoDB, versioned by an immutable build hash with an `atla
 | `atlas_tiles` | one octree node per doc — quantized binary LOD tile (`payload` BinData) |
 | `atlas_meta` | per-version headers-only octree tree + taxonomy dict, and the `active` version pointer |
 | `atlas_points` | one row per paper: exact coords + searchable title/taxonomy text (server-side atlas search + highlight overlay) |
-| `kg_faculty_graphs` | one per-faculty knowledge graph per doc |
+| `kg_faculty_graphs` | one per-faculty graph per doc |
 | `kg_explore` | Topic Explorer term rows + per-key detail docs |
 | `kg_indices` | derived lookups: faculty search index, faculty→atlas indices, department→atlas indices |
 
@@ -72,7 +72,7 @@ Old builds are garbage-collected automatically (keeps the current + previous ver
 - [Node.js](https://nodejs.org/) 20+
 - [MongoDB](https://www.mongodb.com/) (local or Atlas)
 - [Redis](https://redis.io/) (recommended for caching; optional for local dev)
-- Python 3 (only if rebuilding knowledge-graph data)
+- Python 3 (only if rebuilding Atlas data)
 
 ## Setup
 
@@ -113,7 +113,7 @@ The server listens on **port 3002** by default (`PORT`).
 
 - `GET /` — service health (JSON)
 - `GET /health` — lightweight liveness probe
-- `GET /api/kg/health` — knowledge-graph data availability
+- `GET /api/kg/health` — Atlas data availability
 
 ## Related repositories
 
