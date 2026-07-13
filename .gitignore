@@ -64,5 +64,5 @@ __pycache__/
 # Prettier cache
 .prettierrc-cache
 
-# Knowledge Graph generated JSON (rebuild via knowledge-graph/pipeline/build_kg.py)
+# Atlas / KG generated JSON (rebuild via knowledge-graph/pipeline/build_kg.py)
 data/knowledge-graph/

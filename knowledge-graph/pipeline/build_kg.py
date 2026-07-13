@@ -1,5 +1,5 @@
 """
-build_kg.py — Knowledge Graph builder for Research Ambit (IIT Delhi).
+build_kg.py — Atlas builder for Research Ambit (IIT Delhi).
 
 Data sources
 ------------
@@ -500,7 +500,7 @@ def write_atlas_source(papers: list[dict], classification: dict[str, dict]) -> i
 def main():
     t_total = time.perf_counter()
     print("=" * 60)
-    print("Research Ambit — Knowledge Graph Builder (Excel-based)")
+    print("Research Ambit — Atlas Builder (Excel-based)")
     print("=" * 60)
 
     classification = load_classification()
