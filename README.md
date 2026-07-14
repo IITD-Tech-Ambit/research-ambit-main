@@ -45,7 +45,7 @@ All KG data lives in MongoDB, versioned by an immutable build hash with an `atla
 
 ```bash
 # Full rebuild: writes the source JSON, then publishes tiles + all KG data to Mongo
-MONGO_URI="mongodb://user:pass@10.17.8.24:27017/research_ambit?authSource=admin" python -u build_kg.py
+MONGO_URI="mongodb://user:pass@<mongo-host>:27017/research_ambit?authSource=admin" python -u build_kg.py
 
 # Or publish from already-built JSON without a full rebuild:
 MONGO_URI="..." python build_atlas_tiles.py      # writes atlas_tiles/atlas_points/atlas_meta, flips active

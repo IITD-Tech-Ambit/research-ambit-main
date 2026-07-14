@@ -32,7 +32,10 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // ── Config ──────────────────────────────────────────────────────────────────
 
-const MONGO_URI   = process.env.MONGO_URI || "mongodb://admin:password@10.17.8.24:27017/research_ambit?authSource=admin";
+const MONGO_URI   = process.env.MONGO_URI;
+if (!MONGO_URI) {
+  throw new Error("MONGO_URI environment variable is required");
+}
 const PYTHON_BIN  = process.env.PYTHON_BIN  || "python";
 const SCRIPT_PATH = path.resolve(__dirname, "../src/python/fetch_scholar.py");
 const TIMEOUT_MS  = Number(process.env.SCHOLAR_TIMEOUT_MS)  || 60_000;

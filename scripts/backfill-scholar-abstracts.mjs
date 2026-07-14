@@ -28,7 +28,10 @@ dotenv.config({
 
 // ── Config ───────────────────────────────────────────────────────────────────
 
-const MONGO_URI  = process.env.MONGO_URI || "mongodb://admin:password@10.17.8.24:27017/research_ambit?authSource=admin";
+const MONGO_URI  = process.env.MONGO_URI;
+if (!MONGO_URI) {
+  throw new Error("MONGO_URI environment variable is required");
+}
 const S2_API_KEY = process.env.SEMANTIC_SCHOLAR_KEY || "";
 const CR_MAILTO  = process.env.CR_MAILTO || "research@iitd.ac.in";
 const DELAY_MS   = S2_API_KEY ? 500 : 2000;
