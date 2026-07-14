@@ -27,7 +27,7 @@ dotenv.config({
 
 // ── Config ───────────────────────────────────────────────────────────────────
 
-const MONGO_URI   = process.env.MONGO_URI;
+const MONGODB_URI   = process.env.MONGODB_URI;
 const SERPAPI_KEY = process.env.SERPAPI_KEY || "";
 const DELAY_MS    = 1300; // ~1 req/sec for SerpAPI
 
@@ -95,7 +95,7 @@ async function fetchScholarMetrics(scholarId) {
 
 // ── Main ─────────────────────────────────────────────────────────────────────
 
-await mongoose.connect(MONGO_URI);
+await mongoose.connect(MONGODB_URI);
 console.log(`MongoDB connected → ${mongoose.connection.db.databaseName}`);
 if (DRY_RUN) console.log("DRY-RUN — nothing will be written.");
 if (!SERPAPI_KEY) console.warn("WARNING: SERPAPI_KEY not set — Scholar fetch will fail.");

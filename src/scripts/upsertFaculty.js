@@ -145,7 +145,7 @@ const run = async () => {
     log(`Loaded ${records.length} records from ${path.basename(inputFile)}`);
     console.log('');
 
-    await mongoose.connect(process.env.MONGO_URI);
+    await mongoose.connect(process.env.MONGODB_URI);
     ok('Database connected\n');
 
     const { Faculty, Department } = await loadModels();

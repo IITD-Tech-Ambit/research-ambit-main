@@ -25,16 +25,16 @@ import { fileURLToPath } from "url";
 import mongoose         from "mongoose";
 import dotenv           from "dotenv";
 
-// Load .env from the project root so SERPAPI_KEY and MONGO_URI are available.
+// Load .env from the project root so SERPAPI_KEY and MONGODB_URI are available.
 dotenv.config({ path: path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../.env") });
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // ── Config ──────────────────────────────────────────────────────────────────
 
-const MONGO_URI   = process.env.MONGO_URI;
-if (!MONGO_URI) {
-  throw new Error("MONGO_URI environment variable is required");
+const MONGODB_URI   = process.env.MONGODB_URI;
+if (!MONGODB_URI) {
+  throw new Error("MONGODB_URI environment variable is required");
 }
 const PYTHON_BIN  = process.env.PYTHON_BIN  || "python";
 const SCRIPT_PATH = path.resolve(__dirname, "../src/python/fetch_scholar.py");
@@ -186,7 +186,7 @@ async function upsertPapers(ResearchDoc, faculty, schId, papers) {
 
 // ── Main ─────────────────────────────────────────────────────────────────────
 
-await mongoose.connect(MONGO_URI);
+await mongoose.connect(MONGODB_URI);
 console.log(`MongoDB connected → ${mongoose.connection.db.databaseName}`);
 if (DRY_RUN) console.log("DRY-RUN mode — nothing will be written.\n");
 
