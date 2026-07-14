@@ -41,10 +41,43 @@ async function activeVersionOrThrow() {
   return version;
 }
 
-/** initKg is retained for the composition roots; the store is now Mongo, so
- * this only warms the active-version cache (best-effort, non-blocking). */
+/** initKg warms the active-version cache and pre-builds the legacy `/atlas`
+ * body into Redis at boot, so the expensive scan lands at deploy time
+ * instead of on the first visitor. Best-effort, non-blocking. */
 export function initKg() {
-  repo.getActiveVersion().catch(() => {});
+  repo
+    .getActiveVersion()
+    .then((version) => (version ? warmAtlasCache(version) : null))
+    .catch(() => {});
+}
+
+/** Pre-build and cache the full legacy atlas body for `version`, if it isn't
+ * already cached. Safe to call repeatedly (no-ops once warm). */
+export async function warmAtlasCache(version) {
+  const cacheKey = kgCacheKey(version, "atlas-legacy-body");
+  const existing = await kgCacheGet(cacheKey);
+  if (existing) return;
+  await buildAndCacheAtlasBody(version, cacheKey);
+}
+
+async function buildAndCacheAtlasBody(version, cacheKey) {
+  const meta = await repo.getVersionMeta(version);
+  // Full scan — only the legacy fallback path pays this cost, and only once
+  // per version now that initKg() warms it eagerly at boot.
+  const { AtlasPoint } = await import("../models/knowledgeGraph.js");
+  const all = await AtlasPoint.find({ version }, { _id: 0, version: 0 }).lean();
+  const body = JSON.stringify({
+    version: 2,
+    count: all.length,
+    themes: meta?.dict?.themes ?? [],
+    papers: all.map((p) => ({
+      i: p.i, id: p.id, title: p.title, theme: p.theme, domain: p.domain,
+      subdomain: p.subdomain, topic: p.topic, department: p.department,
+      citations: p.citations ?? 0, x: p.x, y: p.y, z: p.z,
+    })),
+  });
+  await kgCacheSet(cacheKey, body);
+  return body;
 }
 
 // Caches only the raw `data`; the envelope is rebuilt per transport so REST and
@@ -281,21 +314,7 @@ export async function getAtlas({ ifNoneMatch } = {}) {
   const cached = await kgCacheGet(cacheKey);
   if (cached) return { notModified: false, etag, body: cached, cached: true };
 
-  const meta = await repo.getVersionMeta(version);
-  // Full scan — only the legacy fallback path pays this cost.
-  const { AtlasPoint } = await import("../models/knowledgeGraph.js");
-  const all = await AtlasPoint.find({ version }, { _id: 0, version: 0 }).lean();
-  const body = JSON.stringify({
-    version: 2,
-    count: all.length,
-    themes: meta?.dict?.themes ?? [],
-    papers: all.map((p) => ({
-      i: p.i, id: p.id, title: p.title, theme: p.theme, domain: p.domain,
-      subdomain: p.subdomain, topic: p.topic, department: p.department,
-      citations: p.citations ?? 0, x: p.x, y: p.y, z: p.z,
-    })),
-  });
-  await kgCacheSet(cacheKey, body);
+  const body = await buildAndCacheAtlasBody(version, cacheKey);
   return { notModified: false, etag, body, cached: false };
 }
 
