@@ -113,10 +113,14 @@ export async function getIndexDoc(version, name) {
 
 /** Topic-explorer term rows matching a Mongo filter. */
 export async function findExploreTerms(version, filter, limit) {
+  const fetchLimit = Math.min(Math.max(limit * 5, limit), 200);
   const rows = await KgExplore.find({ version, kind: "term", ...filter })
-    .limit(limit)
+    .limit(fetchLimit)
     .lean();
-  return rows.map((r) => r.payload);
+  return rows
+    .map((r) => r.payload)
+    .sort((a, b) => (b.paperCount ?? 0) - (a.paperCount ?? 0))
+    .slice(0, limit);
 }
 
 export async function findExploreDetail(version, keyParam) {
@@ -131,39 +135,130 @@ export async function hasExploreTerms(version) {
 }
 
 /**
- * Full-text atlas search. Uses the Mongo text index; falls back to an anchored
- * regex when the tokenized text query yields nothing (keeps parity with the old
- * substring scan). Returns lightweight rows { i, x, y, z }.
+ * Atlas paper search. Requires every query token to appear in at least one
+ * searchable field (logical AND). Mongo `$text` alone uses OR for multi-word
+ * queries, which made "heat transfer" return more hits than "heat".
  */
 export async function searchAtlasPoints(version, query, limit) {
   if (!version || !query) return [];
   const projection = { _id: 0, i: 1, x: 1, y: 1, z: 1 };
-  let rows = await AtlasPoint.find(
-    { version, $text: { $search: query } },
-    { ...projection, score: { $meta: "textScore" } },
-  )
-    .sort({ score: { $meta: "textScore" } })
-    .limit(limit)
-    .lean();
+  const tokens = tokenizeQuery(query);
+  if (!tokens.length) return [];
 
-  if (!rows.length) {
-    const rx = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
-    rows = await AtlasPoint.find(
-      { version, $or: [{ title: rx }, { theme: rx }, { domain: rx }, { subdomain: rx }, { topic: rx }] },
-      projection,
+  const andClauses = tokenAndClauses(tokens);
+
+  // Prefer text-index shortlist for single-token queries (fast path), then fall
+  // back to the AND regex scan when text yields nothing.
+  if (tokens.length === 1) {
+    let rows = await AtlasPoint.find(
+      { version, $text: { $search: tokens[0] } },
+      { ...projection, score: { $meta: "textScore" } },
     )
+      .sort({ score: { $meta: "textScore" } })
       .limit(limit)
       .lean();
+    if (rows.length) return rows;
   }
-  return rows;
+
+  return AtlasPoint.find({ version, $and: andClauses }, projection)
+    .limit(limit)
+    .lean();
 }
 
-/** Exact coords for a set of atlas indices (highlight overlay). */
+const IN_CHUNK = 4000;
+
+function tokenizeQuery(query) {
+  return String(query)
+    .trim()
+    .toLowerCase()
+    .split(/\s+/)
+    .map((t) => t.replace(/[^\p{L}\p{N}-]+/gu, ""))
+    .filter((t) => t.length >= 2);
+}
+
+function tokenAndClauses(tokens) {
+  return tokens.map((token) => {
+    const rx = new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+    return {
+      $or: [
+        { title: rx },
+        { theme: rx },
+        { domain: rx },
+        { subdomain: rx },
+        { topic: rx },
+      ],
+    };
+  });
+}
+
+/**
+ * Same AND-token paper search, restricted to a set of atlas indices.
+ * Chunks `$in` to stay under Mongo BSON limits.
+ */
+export async function searchAtlasPointsWithin(version, query, withinIndices, limit) {
+  if (!version || !query || !withinIndices?.length || limit <= 0) return [];
+  const tokens = tokenizeQuery(query);
+  if (!tokens.length) return [];
+
+  const projection = { _id: 0, i: 1, x: 1, y: 1, z: 1 };
+  const andClauses = tokenAndClauses(tokens);
+  const out = [];
+  const seen = new Set();
+
+  for (let off = 0; off < withinIndices.length && out.length < limit; off += IN_CHUNK) {
+    const chunk = withinIndices.slice(off, off + IN_CHUNK);
+    const rows = await AtlasPoint.find(
+      { version, i: { $in: chunk }, $and: andClauses },
+      projection,
+    )
+      .limit(limit - out.length)
+      .lean();
+    for (const row of rows) {
+      if (seen.has(row.i)) continue;
+      seen.add(row.i);
+      out.push(row);
+      if (out.length >= limit) break;
+    }
+  }
+  return out;
+}
+
+/**
+ * Papers whose department matches the query, restricted to `withinIndices`.
+ */
+export async function findPointsByDepartmentWithin(version, deptQuery, withinIndices, limit) {
+  if (!version || !deptQuery || !withinIndices?.length || limit <= 0) return [];
+  const q = String(deptQuery).trim();
+  if (!q) return [];
+  const rx = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+  const projection = { _id: 0, i: 1, x: 1, y: 1, z: 1 };
+  const out = [];
+  const seen = new Set();
+
+  for (let off = 0; off < withinIndices.length && out.length < limit; off += IN_CHUNK) {
+    const chunk = withinIndices.slice(off, off + IN_CHUNK);
+    const rows = await AtlasPoint.find(
+      { version, i: { $in: chunk }, department: rx },
+      projection,
+    )
+      .limit(limit - out.length)
+      .lean();
+    for (const row of rows) {
+      if (seen.has(row.i)) continue;
+      seen.add(row.i);
+      out.push(row);
+      if (out.length >= limit) break;
+    }
+  }
+  return out;
+}
+
+/** Exact coords + taxonomy for a set of atlas indices (highlight overlay). */
 export async function getPointsByIndices(version, indices) {
   if (!version || !indices?.length) return [];
   return AtlasPoint.find(
     { version, i: { $in: indices } },
-    { _id: 0, i: 1, x: 1, y: 1, z: 1 },
+    { _id: 0, i: 1, id: 1, title: 1, theme: 1, department: 1, x: 1, y: 1, z: 1 },
   ).lean();
 }
 

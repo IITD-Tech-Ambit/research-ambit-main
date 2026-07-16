@@ -223,6 +223,10 @@ service KnowledgeGraphService {
   rpc GetAtlas(GetAtlasRequest) returns (GetAtlasResponse);
   // GET /api/kg/atlas/search
   rpc SearchAtlas(AtlasSearchRequest) returns (AtlasIndicesResponse);
+  // GET /api/kg/atlas/refine — nested search: refine `q` within primary `base_q`
+  rpc SearchAtlasRefine(AtlasRefineRequest) returns (AtlasRefineResponse);
+  // GET /api/kg/atlas/suggest — blended themes/topics/faculty/department typeahead
+  rpc SearchAtlasSuggest(AtlasSuggestRequest) returns (AtlasSuggestResponse);
   // GET /api/kg/atlas/faculty-indices
   rpc GetAtlasFacultyIndices(AtlasFacultyIndicesRequest) returns (AtlasFacultyIndicesResponse);
   // GET /api/kg/atlas/faculty-search
@@ -318,6 +322,52 @@ message AtlasIndicesResponse {
   repeated int32 indices = 3;
 }
 
+message AtlasRefineRequest {
+  string base_q = 1;          // JSON: baseQ — primary search query
+  string q = 2;               // refine / nested query
+  int32 limit = 3;            // default 8000, max 70000
+}
+message AtlasRefineResponse {
+  string base_query = 1;      // JSON: baseQuery
+  string query = 2;
+  int32 base_count = 3;       // JSON: baseCount
+  int32 match_count = 4;      // JSON: matchCount
+  repeated int32 indices = 5;
+  repeated AtlasPointCoord points = 6;
+}
+
+message AtlasSuggestRequest {
+  string q = 1;
+  int32 limit = 2;   // per-group default 8, max 20
+}
+message AtlasSuggestTerm {
+  string kind = 1;          // theme | topic
+  string key = 2;
+  string label = 3;
+  int32 paper_count = 4;    // JSON: paperCount
+  int32 faculty_count = 5;  // JSON: facultyCount
+  int32 dept_count = 6;     // JSON: deptCount
+}
+message AtlasSuggestFaculty {
+  string faculty_id = 1;    // JSON: facultyId
+  string name = 2;
+  string department = 3;
+  int32 paper_count = 4;    // JSON: paperCount
+  int32 atlas_count = 5;    // JSON: atlasCount
+}
+message AtlasSuggestDepartment {
+  string department = 1;
+  int32 faculty_count = 2;  // JSON: facultyCount
+  int32 paper_count = 3;    // JSON: paperCount
+}
+message AtlasSuggestResponse {
+  string query = 1;
+  repeated AtlasSuggestTerm themes = 2;
+  repeated AtlasSuggestTerm topics = 3;
+  repeated AtlasSuggestFaculty faculty = 4;
+  repeated AtlasSuggestDepartment departments = 5;
+}
+
 message AtlasFacultyIndicesRequest { repeated string ids = 1; } // REST: comma-separated
 message AtlasFacultyIndicesResponse {
   repeated string faculty_ids = 1;  // JSON: facultyIds
@@ -406,6 +456,10 @@ message AtlasPointCoord {
   float x = 2;
   float y = 3;
   float z = 4;
+  string id = 5;          // paper ObjectId hex
+  string theme = 6;       // broad theme label for colored overlay
+  string title = 7;       // paper title (sidebar)
+  string department = 8;  // IITD department (theme cluster sidebar)
 }
 message AtlasPointsResponse { repeated AtlasPointCoord points = 1; }
 

@@ -294,7 +294,18 @@ export async function getAtlasPoints({ indices } = {}) {
   if (!list.length) return { data: { points: [] }, cached: false };
   const rows = await repo.getPointsByIndices(version, list);
   return {
-    data: { points: rows.map((r) => ({ i: r.i, x: r.x, y: r.y, z: r.z })) },
+    data: {
+      points: rows.map((r) => ({
+        i: r.i,
+        id: r.id ?? "",
+        title: r.title ?? "",
+        theme: r.theme ?? "",
+        department: r.department ?? "",
+        x: r.x,
+        y: r.y,
+        z: r.z,
+      })),
+    },
     cached: false,
   };
 }
@@ -326,10 +337,134 @@ export async function searchAtlas({ q, limit } = {}) {
   if (!query) {
     return { data: { query: "", matchCount: 0, indices: [] }, cached: false };
   }
-  const key = kgCacheKey(version, "atlas-search", query.toLowerCase(), l);
+  const key = kgCacheKey(version, "atlas-search-and", query.toLowerCase(), l);
   return cachedData(key, async () => {
     const rows = await repo.searchAtlasPoints(version, query, l);
     return { query, matchCount: rows.length, indices: rows.map((r) => r.i) };
+  });
+}
+
+/**
+ * Nested / refine-within search: papers that match `baseQ` AND also match
+ * the refine term via text, department, or faculty/department indexes.
+ * Resolves the full base set server-side (up to 70k) so nested results are
+ * not limited by the client's overlay cap.
+ */
+export async function searchAtlasRefine({ baseQ, q, limit } = {}) {
+  const version = await activeVersionOrThrow();
+  const baseQuery = String(baseQ ?? "").trim();
+  const refineQuery = String(q ?? "").trim();
+  const l = Math.min(Number(limit) || 8000, 70000);
+
+  if (!baseQuery) {
+    return {
+      data: {
+        baseQuery: "",
+        query: refineQuery,
+        baseCount: 0,
+        matchCount: 0,
+        indices: [],
+        points: [],
+      },
+      cached: false,
+    };
+  }
+
+  if (!refineQuery) {
+    const base = await searchAtlas({ q: baseQuery, limit: l });
+    const indices = base.data.indices ?? [];
+    const points = await repo.getPointsByIndices(version, indices);
+    return {
+      data: {
+        baseQuery,
+        query: "",
+        baseCount: base.data.matchCount ?? indices.length,
+        matchCount: indices.length,
+        indices,
+        points: points.map((p) => ({
+          i: p.i,
+          id: p.id || "",
+          title: p.title || "",
+          theme: p.theme || "",
+          department: p.department || "",
+          x: p.x,
+          y: p.y,
+          z: p.z,
+        })),
+      },
+      cached: base.cached,
+    };
+  }
+
+  const key = kgCacheKey(
+    version,
+    "atlas-refine-v1",
+    baseQuery.toLowerCase(),
+    refineQuery.toLowerCase(),
+    l,
+  );
+  return cachedData(key, async () => {
+    // Resolve the authoritative base set (not capped at the UI overlay size).
+    const base = await searchAtlas({ q: baseQuery, limit: 70000 });
+    const baseIndices = base.data.indices ?? [];
+    const baseSet = new Set(baseIndices);
+    const baseCount = base.data.matchCount ?? baseIndices.length;
+
+    if (!baseIndices.length) {
+      return {
+        baseQuery,
+        query: refineQuery,
+        baseCount: 0,
+        matchCount: 0,
+        indices: [],
+        points: [],
+      };
+    }
+
+    const refineSet = new Set();
+
+    const [textRows, deptRows, fac, dept] = await Promise.all([
+      repo.searchAtlasPointsWithin(version, refineQuery, baseIndices, l),
+      repo.findPointsByDepartmentWithin(version, refineQuery, baseIndices, l),
+      searchAtlasFaculty({ q: refineQuery, limit: 50 }).catch(() => ({
+        data: { indices: [], matches: [] },
+      })),
+      searchAtlasDepartment({ q: refineQuery, limit: 50 }).catch(() => ({
+        data: { indices: [], matches: [] },
+      })),
+    ]);
+
+    for (const row of textRows) refineSet.add(row.i);
+    for (const row of deptRows) refineSet.add(row.i);
+    for (const i of fac.data?.indices ?? []) {
+      if (baseSet.has(i)) refineSet.add(i);
+    }
+    for (const i of dept.data?.indices ?? []) {
+      if (baseSet.has(i)) refineSet.add(i);
+    }
+
+    const indices = [...refineSet].slice(0, l);
+    const points = indices.length
+      ? await repo.getPointsByIndices(version, indices)
+      : [];
+
+    return {
+      baseQuery,
+      query: refineQuery,
+      baseCount,
+      matchCount: indices.length,
+      indices,
+      points: points.map((p) => ({
+        i: p.i,
+        id: p.id || "",
+        title: p.title || "",
+        theme: p.theme || "",
+        department: p.department || "",
+        x: p.x,
+        y: p.y,
+        z: p.z,
+      })),
+    };
   });
 }
 
@@ -442,6 +577,106 @@ export async function getDepartmentAtlasIndices({ departments } = {}) {
       for (const idx of entry.indices) indices.add(idx);
     }
     return { departments: resolved, matchCount: indices.size, indices: [...indices] };
+  });
+}
+
+function mapSuggestTerm(row) {
+  return {
+    kind: row.type,
+    key: row.key,
+    label: row.term,
+    paperCount: row.paperCount ?? 0,
+    facultyCount: row.facultyCount ?? 0,
+    deptCount: row.deptCount ?? 0,
+  };
+}
+
+async function browseTopFaculty(version, limit, indicesMap) {
+  const searchIndex = await repo.getIndexDoc(version, "faculty-search-index");
+  if (!searchIndex) return [];
+  return searchIndex.slice(0, limit).map((f) => ({
+    facultyId: f.facultyId,
+    name: f.name,
+    department: f.department,
+    paperCount: f.paperCount ?? 0,
+    atlasCount: (indicesMap?.[f.facultyId] ?? []).length,
+  }));
+}
+
+async function browseTopDepartments(version, limit) {
+  const deptIndex = await repo.getIndexDoc(version, "department-atlas-indices");
+  if (!deptIndex) return [];
+  return Object.entries(deptIndex)
+    .sort((a, b) => (b[1].indices?.length ?? 0) - (a[1].indices?.length ?? 0))
+    .slice(0, limit)
+    .map(([department, entry]) => ({
+      department,
+      facultyCount: entry.facultyCount ?? 0,
+      paperCount: entry.indices?.length ?? 0,
+    }));
+}
+
+/**
+ * Blended atlas search suggestions for the knowledge-graph UI: themes, topics,
+ * faculty, and departments. Read-only — reuses explore terms + existing indices.
+ */
+export async function searchAtlasSuggest({ q, limit } = {}) {
+  const version = await activeVersionOrThrow();
+  const query = String(q ?? "").trim();
+  const perGroup = Math.min(Number(limit) || 8, 20);
+  const key = kgCacheKey(version, "atlas-suggest", query.toLowerCase(), perGroup);
+
+  return cachedData(key, async () => {
+    if (!query) {
+      const [themeRows, topicRows, indicesMap] = await Promise.all([
+        repo.findExploreTerms(version, { type: "theme" }, perGroup),
+        repo.findExploreTerms(version, { type: "topic" }, perGroup),
+        repo.getIndexDoc(version, "faculty-atlas-indices"),
+      ]);
+      const [faculty, departments] = await Promise.all([
+        browseTopFaculty(version, perGroup, indicesMap),
+        browseTopDepartments(version, Math.ceil(perGroup / 2)),
+      ]);
+      return {
+        query: "",
+        themes: themeRows.map(mapSuggestTerm),
+        topics: topicRows.map(mapSuggestTerm),
+        faculty,
+        departments,
+      };
+    }
+
+    const termFilter = { term: { $regex: escapeRegex(query), $options: "i" } };
+    const [termRows, facultyResult, deptResult] = await Promise.all([
+      repo.findExploreTerms(version, termFilter, perGroup * 4),
+      searchAtlasFaculty({ q: query, limit: perGroup }),
+      searchAtlasDepartment({ q: query, limit: Math.ceil(perGroup / 2) }),
+    ]);
+
+    const themes = [];
+    const topics = [];
+    for (const row of termRows) {
+      if (row.type === "theme" && themes.length < perGroup) themes.push(mapSuggestTerm(row));
+      else if (row.type === "topic" && topics.length < perGroup) topics.push(mapSuggestTerm(row));
+    }
+
+    return {
+      query,
+      themes,
+      topics,
+      faculty: (facultyResult.data?.matches ?? []).map((f) => ({
+        facultyId: f.facultyId,
+        name: f.name,
+        department: f.department,
+        paperCount: f.paperCount ?? 0,
+        atlasCount: f.atlasCount ?? 0,
+      })),
+      departments: (deptResult.data?.matches ?? []).map((d) => ({
+        department: d.department,
+        facultyCount: d.facultyCount ?? 0,
+        paperCount: d.atlasCount ?? 0,
+      })),
+    };
   });
 }
 

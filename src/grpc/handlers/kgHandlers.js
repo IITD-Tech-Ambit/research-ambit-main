@@ -102,6 +102,60 @@ export function createKgHandlers(kgService) {
             };
         }),
 
+        SearchAtlasRefine: unary(async ({ request: r }) => {
+            const { data } = await kgService.searchAtlasRefine({
+                baseQ: r.base_q,
+                q: r.q,
+                limit: r.limit,
+            });
+            return {
+                base_query: data.baseQuery || "",
+                query: data.query || "",
+                base_count: data.baseCount ?? 0,
+                match_count: data.matchCount ?? 0,
+                indices: data.indices || [],
+                points: (data.points || []).map((p) => ({
+                    i: p.i,
+                    x: p.x,
+                    y: p.y,
+                    z: p.z,
+                    id: p.id || "",
+                    title: p.title || "",
+                    theme: p.theme || "",
+                    department: p.department || "",
+                })),
+            };
+        }),
+
+        SearchAtlasSuggest: unary(async ({ request: r }) => {
+            const { data } = await kgService.searchAtlasSuggest({ q: r.q, limit: r.limit });
+            const mapTerm = (t) => ({
+                kind: t.kind || "",
+                key: t.key || "",
+                label: t.label || "",
+                paper_count: t.paperCount ?? 0,
+                faculty_count: t.facultyCount ?? 0,
+                dept_count: t.deptCount ?? 0,
+            });
+            return {
+                query: data.query || "",
+                themes: (data.themes || []).map(mapTerm),
+                topics: (data.topics || []).map(mapTerm),
+                faculty: (data.faculty || []).map((f) => ({
+                    faculty_id: f.facultyId || "",
+                    name: f.name || "",
+                    department: f.department || "",
+                    paper_count: f.paperCount ?? 0,
+                    atlas_count: f.atlasCount ?? 0,
+                })),
+                departments: (data.departments || []).map((d) => ({
+                    department: d.department || "",
+                    faculty_count: d.facultyCount ?? 0,
+                    paper_count: d.paperCount ?? 0,
+                })),
+            };
+        }),
+
         GetAtlasFacultyIndices: unary(async ({ request: r }) => {
             const { data } = await kgService.getFacultyAtlasIndices({ ids: r.ids });
             return {
@@ -169,7 +223,16 @@ export function createKgHandlers(kgService) {
         GetAtlasPoints: unary(async ({ request: r }) => {
             const { data } = await kgService.getAtlasPoints({ indices: r.indices });
             return {
-                points: (data.points || []).map((p) => ({ i: p.i, x: p.x, y: p.y, z: p.z })),
+                points: (data.points || []).map((p) => ({
+                    i: p.i,
+                    x: p.x,
+                    y: p.y,
+                    z: p.z,
+                    id: p.id || "",
+                    title: p.title || "",
+                    theme: p.theme || "",
+                    department: p.department || "",
+                })),
             };
         }),
 

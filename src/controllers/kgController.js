@@ -91,6 +91,18 @@ kg.searchAtlas = asyncErrorHandler(async (req, res) => {
   return sendKg(res, await kgService.searchAtlas({ q: req.query.q, limit: req.query.limit }));
 });
 
+kg.searchAtlasRefine = asyncErrorHandler(async (req, res) => {
+  return sendKg(res, await kgService.searchAtlasRefine({
+    baseQ: req.query.baseQ,
+    q: req.query.q,
+    limit: req.query.limit,
+  }));
+});
+
+kg.searchAtlasSuggest = asyncErrorHandler(async (req, res) => {
+  return sendKg(res, await kgService.searchAtlasSuggest({ q: req.query.q, limit: req.query.limit }));
+});
+
 kg.getFacultyAtlasIndices = asyncErrorHandler(async (req, res) => {
   const ids = String(req.query.ids ?? "").split(",");
   return sendKg(res, await kgService.getFacultyAtlasIndices({ ids }));
