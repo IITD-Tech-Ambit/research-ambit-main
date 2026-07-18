@@ -2,6 +2,10 @@ node_modules
 .git
 .gitignore
 *.md
+# KG data + offline build pipeline are no longer needed at runtime: all KG data
+# is served from MongoDB (published by knowledge-graph/pipeline/build_kg.py).
+data/knowledge-graph
+knowledge-graph
 .env.local
 .env.development
 .DS_Store

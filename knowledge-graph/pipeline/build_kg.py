@@ -1,5 +1,5 @@
 """
-build_kg.py — Knowledge Graph builder for Research Ambit (IIT Delhi).
+build_kg.py — Atlas builder for Research Ambit (IIT Delhi).
 
 Data sources
 ------------
@@ -500,7 +500,7 @@ def write_atlas_source(papers: list[dict], classification: dict[str, dict]) -> i
 def main():
     t_total = time.perf_counter()
     print("=" * 60)
-    print("Research Ambit — Knowledge Graph Builder (Excel-based)")
+    print("Research Ambit — Atlas Builder (Excel-based)")
     print("=" * 60)
 
     classification = load_classification()
@@ -569,6 +569,23 @@ def main():
     with open(_ATLAS_FILE, "w", encoding="utf-8") as f:
         json.dump(atlas, f, ensure_ascii=False, separators=(",", ":"))
     print(f"[build_kg]   {atlas['count']:,} papers -> {_ATLAS_FILE.name}")
+
+    # Publish everything straight to MongoDB (the runtime no longer reads the
+    # filesystem): octree LOD tiles first (sets the active version), then the
+    # rest of the KG data under that same version. Skips cleanly if MONGO_URI is
+    # unset so the pure-file build still works offline.
+    if MONGO_URI:
+        print("\n[build_kg] publishing atlas octree tiles to MongoDB ...")
+        from build_atlas_tiles import build_atlas_tiles as _build_tiles
+        from migrate_kg_to_mongo import migrate as _migrate_kg
+        _version = _build_tiles(_ATLAS_FILE, mongo_uri=MONGO_URI)
+        print(f"[build_kg]   atlas tiles published (version {_version})")
+        print("[build_kg] migrating graphs / explore / indices to MongoDB ...")
+        _migrate_kg(OUTPUT_DIR, version_override=_version, mongo_uri=MONGO_URI)
+        print(f"[build_kg]   KG data published to MongoDB (version {_version})")
+    else:
+        print("\n[build_kg] MONGO_URI unset — skipped MongoDB publish "
+              "(run build_atlas_tiles.py + migrate_kg_to_mongo.py manually)")
 
     total_papers = sum(i["paperCount"] for i in index)
     match_pct    = 100 * total_matched / max(total_papers, 1)

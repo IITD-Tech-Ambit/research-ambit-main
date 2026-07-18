@@ -1,0 +1,49 @@
+name: Sync proto to proto-registry
+
+# This service owns directory.v1 - protos/directory/v1/directory.proto here
+# is the source of truth. Whenever it changes on main, mirror it into
+# github.com/IITD-Tech-Ambit/proto-registry so other services picking up a
+# fresh copy of the registry see the current contract. Deliberately minimal:
+# no linting, no versioning, just copy the file and push if it changed.
+on:
+  push:
+    branches: [main]
+    paths:
+      - protos/directory/v1/directory.proto
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout this repo
+        uses: actions/checkout@v4
+        with:
+          path: source
+
+      - name: Checkout proto-registry
+        uses: actions/checkout@v4
+        with:
+          repository: IITD-Tech-Ambit/proto-registry
+          token: ${{ secrets.PROTO_REGISTRY_TOKEN }}
+          path: proto-registry
+
+      - name: Copy directory.proto into proto-registry
+        run: |
+          mkdir -p proto-registry/proto/directory/v1
+          cp source/protos/directory/v1/directory.proto \
+             proto-registry/proto/directory/v1/directory.proto
+
+      - name: Commit and push if changed
+        working-directory: proto-registry
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          if git diff --quiet; then
+            echo "No changes to proto/directory/v1/directory.proto - skipping."
+            exit 0
+          fi
+
+          git add proto/directory/v1/directory.proto
+          git commit -m "Sync directory.v1 from research-ambit-main@${{ github.sha }}"
+          git push origin main

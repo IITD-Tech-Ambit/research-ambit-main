@@ -43,8 +43,8 @@ const DELAY_MS = Number(getOpt("--delay", "1200")) || 1200;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const run = async () => {
-    if (!process.env.MONGO_URI) {
-        console.error("MONGO_URI not set in .env");
+    if (!process.env.MONGODB_URI) {
+        console.error("MONGODB_URI not set in .env");
         process.exit(1);
     }
     if (!process.env.SERPAPI_KEY) {
@@ -54,7 +54,7 @@ const run = async () => {
         );
     }
 
-    await mongoose.connect(process.env.MONGO_URI);
+    await mongoose.connect(process.env.MONGODB_URI);
     console.log("DB connected");
 
     // Faculty with no scopus id but a google scholar id.

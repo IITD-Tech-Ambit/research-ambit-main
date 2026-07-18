@@ -62,12 +62,12 @@ const run = async () => {
   if (LIMIT > 0) console.log(`  Limit: ${LIMIT} records`);
   console.log("");
 
-  if (!process.env.MONGO_URI) {
-    err("MONGO_URI not set in .env");
+  if (!process.env.MONGODB_URI) {
+    err("MONGODB_URI not set in .env");
     process.exit(1);
   }
 
-  await mongoose.connect(process.env.MONGO_URI);
+  await mongoose.connect(process.env.MONGODB_URI);
   ok("Database connected\n");
 
   const { default: Faculty } = await import("../models/faculty.js");

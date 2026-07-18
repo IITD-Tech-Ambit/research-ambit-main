@@ -74,32 +74,24 @@ const ResearchMetaDataScopus = new mongoose.Schema({
     timestamps: true
 });
 
-// === INDEXES ===
-
-// 1. Primary filter compound index (handles year + department + type queries)
 ResearchMetaDataScopus.index({
     publication_year: -1,
     field_associated: 1,
     document_type: 1
 });
 
-// 2. Author-based queries (faculty publications: match authors.author_id +
+// Author-based queries (faculty publications: match authors.author_id +
 // publication_year, sort citation_count — getFacultyPublications)
 ResearchMetaDataScopus.index({ "authors.author_id": 1, publication_year: -1, citation_count: -1 });
 
-// 3. Subject area filtering
 ResearchMetaDataScopus.index({ subject_area: 1, publication_year: -1 });
-
-// 4. Citation-based sorting
 ResearchMetaDataScopus.index({ citation_count: -1 });
-
-// 5. Text index for fallback keyword search
 ResearchMetaDataScopus.index(
     { title: "text", abstract: "text" },
     { weights: { title: 10, abstract: 1 }, name: "text_search_fallback" }
 );
 
-// 6. Kerberos-based queries (faculty research summary / publications) — the
+// Kerberos-based queries (faculty research summary / publications) — the
 // trailing citation_count also covers getFacultyPublications' sort, not
 // just the year-grouping in getFacultyResearchSummary.
 ResearchMetaDataScopus.index({ kerberos: 1, publication_year: -1, citation_count: -1 });

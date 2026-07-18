@@ -22,7 +22,10 @@ dotenv.config({
 
 // ── Config ───────────────────────────────────────────────────────────────────
 
-const MONGO_URI   = process.env.MONGO_URI || "mongodb://admin:password@10.17.8.24:27017/research_ambit?authSource=admin";
+const MONGODB_URI   = process.env.MONGODB_URI;
+if (!MONGODB_URI) {
+  throw new Error("MONGODB_URI environment variable is required");
+}
 const SERPAPI_KEY = process.env.SERPAPI_KEY || "";
 const DELAY_MS    = 1200; // ~1 req/sec — SerpAPI's recommended rate
 
@@ -104,7 +107,7 @@ async function fetchFromSerpApi(title) {
 
 // ── Main ─────────────────────────────────────────────────────────────────────
 
-await mongoose.connect(MONGO_URI);
+await mongoose.connect(MONGODB_URI);
 console.log(`MongoDB connected → ${mongoose.connection.db.databaseName}`);
 if (DRY_RUN) console.log("DRY-RUN mode — nothing will be written.");
 console.log(`SerpAPI key: ${SERPAPI_KEY.slice(0, 8)}...****\n`);

@@ -28,7 +28,10 @@ dotenv.config({
 
 // ── Config ───────────────────────────────────────────────────────────────────
 
-const MONGO_URI  = process.env.MONGO_URI || "mongodb://admin:password@10.17.8.24:27017/research_ambit?authSource=admin";
+const MONGODB_URI  = process.env.MONGODB_URI;
+if (!MONGODB_URI) {
+  throw new Error("MONGODB_URI environment variable is required");
+}
 const S2_API_KEY = process.env.SEMANTIC_SCHOLAR_KEY || "";
 const CR_MAILTO  = process.env.CR_MAILTO || "research@iitd.ac.in";
 const DELAY_MS   = S2_API_KEY ? 500 : 2000;
@@ -213,7 +216,7 @@ async function resolveAbstractAndLink(doc) {
 
 // ── Main ─────────────────────────────────────────────────────────────────────
 
-await mongoose.connect(MONGO_URI);
+await mongoose.connect(MONGODB_URI);
 console.log(`MongoDB connected → ${mongoose.connection.db.databaseName}`);
 if (DRY_RUN) console.log("DRY-RUN mode — nothing will be written.\n");
 console.log(`Semantic Scholar API key: ${S2_API_KEY ? "YES ✓" : "NO (rate limit applies)"}\n`);

@@ -2,22 +2,26 @@
 node_modules/
 .npm
 .yarn-integrity
-.pnpm-debug.log*
 
 # ==================== ENVIRONMENT FILES ====================
 .env
+.env.*
 .env.local
 .env.docker
 .env.development.local
 .env.test.local
 .env.production.local
+# Keep the tracked template
+!.env.example
 
 # ==================== LOGS ====================
 logs/
 *.log
 npm-debug.log*
+yarn-*.log*
 yarn-debug.log*
 yarn-error.log*
+pnpm-debug.log*
 
 # ==================== BUILD / OUTPUT ====================
 dist/
@@ -46,8 +50,19 @@ client/*
 uploads/
 tmp/
 
+# ==================== RUNTIME / CACHE ====================
+*.pid
+*.seed
+*.pid.lock
+.cache/
+.pm2/
+
+# Python bytecode (fetch_scholar helper)
+__pycache__/
+*.pyc
+
 # Prettier cache
 .prettierrc-cache
 
-# Knowledge Graph generated JSON (rebuild via knowledge-graph/pipeline/build_kg.py)
+# Atlas / KG generated JSON (rebuild via knowledge-graph/pipeline/build_kg.py)
 data/knowledge-graph/

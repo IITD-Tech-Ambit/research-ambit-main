@@ -1,6 +1,6 @@
 # Research Ambit — Backend API
 
-Express.js backend for Research Ambit at IIT Delhi. It serves the faculty directory, CMS, knowledge-graph explorer, research atlas, and user feedback APIs consumed by the [Research Ambit portal](https://researchambit.iitd.ac.in/) ([tech-ambit-explorer](https://github.com/IITD-Tech-Ambit/tech-ambit-explorer)).
+Express.js backend for Research Ambit at IIT Delhi. It serves the faculty directory, CMS, Atlas, and user feedback APIs consumed by the [Research Ambit portal](https://researchambit.iitd.ac.in/) ([tech-ambit-explorer](https://github.com/IITD-Tech-Ambit/tech-ambit-explorer)).
 
 **API reference:** [Postman documentation](https://documenter.getpostman.com/view/32690520/2sB3dPTWfN)
 
@@ -21,12 +21,42 @@ Shared data stores: MongoDB · Redis · OpenSearch
 | Module | Route prefix | Purpose |
 |--------|--------------|---------|
 | Faculty directory | `/api/directory` | Browse, search, and filter ~1,000+ faculty; profiles, publications, Scopus/Kerberos lookups |
-| Knowledge graph | `/api/kg` | Per-faculty graphs, topic explorer, research atlas search and cluster breakdown |
+| Atlas | `/api/kg` | Per-faculty graphs, topic explorer, Atlas search and cluster breakdown |
 | CMS | `/api/content` | Articles and announcements with likes, comments, and moderation |
 | Users | `/api/user` | Registration, login (JWT), profile management |
 | Suggestions | `/api/suggestions` | User feedback submissions with optional screenshots |
 
-Knowledge-graph JSON is generated offline by `knowledge-graph/pipeline/build_kg.py` from classified Scopus papers and MongoDB metadata, then served from `data/knowledge-graph/` (or `KG_DATA_DIR`).
+Atlas data is generated offline by `knowledge-graph/pipeline/build_kg.py` from classified Scopus papers and MongoDB metadata, then **published straight into MongoDB** (octree LOD atlas tiles + faculty graphs + explore/index docs). The runtime no longer reads the filesystem — Atlas streams octree tiles by viewport instead of shipping one ~27 MB JSON. See [Atlas data (MongoDB)](#atlas-data-mongodb).
+
+### Atlas data (MongoDB)
+
+All KG data lives in MongoDB, versioned by an immutable build hash with an `atlas_meta` `active` pointer flipped atomically at the end of a build:
+
+| Collection | Contents |
+|------------|----------|
+| `atlas_tiles` | one octree node per doc — quantized binary LOD tile (`payload` BinData) |
+| `atlas_meta` | per-version headers-only octree tree + taxonomy dict, and the `active` version pointer |
+| `atlas_points` | one row per paper: exact coords + searchable title/taxonomy text (server-side atlas search + highlight overlay) |
+| `kg_faculty_graphs` | one per-faculty graph per doc |
+| `kg_explore` | Topic Explorer term rows + per-key detail docs |
+| `kg_indices` | derived lookups: faculty search index, faculty→atlas indices, department→atlas indices |
+
+**One-time / recurring publish** (run from `knowledge-graph/pipeline`, with `MONGO_URI` set to the target — e.g. the VM Mongo):
+
+```bash
+# Full rebuild: writes the source JSON, then publishes tiles + all KG data to Mongo
+MONGO_URI="mongodb://user:pass@<mongo-host>:27017/research_ambit?authSource=admin" python -u build_kg.py
+
+# Or publish from already-built JSON without a full rebuild:
+MONGO_URI="..." python build_atlas_tiles.py      # writes atlas_tiles/atlas_points/atlas_meta, flips active
+MONGO_URI="..." python migrate_kg_to_mongo.py    # writes graphs/explore/indices under the active version
+```
+
+Old builds are garbage-collected automatically (keeps the current + previous version). The backend picks up the new `active` version within ~30 s (`KG_ACTIVE_TTL_MS`); no redeploy needed.
+
+**Atlas serving:** the frontend streams octree tiles via `GET /api/kg/atlas/tree`, `.../atlas/dict`, `.../atlas/tile/:nodeKey` (raw `application/octet-stream`, immutable + long-cached) and `.../atlas/points?indices=…` (highlight overlay). Server-side search is `GET /api/kg/atlas/search`. The frontend renderer is selected by `VITE_ATLAS_TILES` (default on); the legacy `GET /api/kg/atlas` monolith is retained as a fallback (rebuilt from `atlas_points`) during the migration window.
+
+**Cutover (after verifying the tile renderer against real data):** flip `VITE_ATLAS_TILES` on for all environments, then remove the legacy `getAtlas`/`GetAtlas` path plus the client-side full-text scan and `paperIdToIndex` bloat in `tech-ambit-explorer` (`ResearchAtlas.tsx`, `atlasClusters.ts`). The filesystem data dependency is already dropped: the runtime never reads `data/knowledge-graph/`, and the image excludes it via `.dockerignore`.
 
 ## Architecture
 
@@ -42,7 +72,7 @@ Knowledge-graph JSON is generated offline by `knowledge-graph/pipeline/build_kg.
 - [Node.js](https://nodejs.org/) 20+
 - [MongoDB](https://www.mongodb.com/) (local or Atlas)
 - [Redis](https://redis.io/) (recommended for caching; optional for local dev)
-- Python 3 (only if rebuilding knowledge-graph data)
+- Python 3 (only if rebuilding Atlas data)
 
 ## Setup
 
@@ -83,7 +113,7 @@ The server listens on **port 3002** by default (`PORT`).
 
 - `GET /` — service health (JSON)
 - `GET /health` — lightweight liveness probe
-- `GET /api/kg/health` — knowledge-graph data availability
+- `GET /api/kg/health` — Atlas data availability
 
 ## Related repositories
 
