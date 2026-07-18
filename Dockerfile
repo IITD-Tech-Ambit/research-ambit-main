@@ -1,11 +1,9 @@
 # Backend API - Node.js with PM2
 FROM node:20-alpine
 
-# Proxy for IITD network, plus auth for the private @iitd-tech-ambit GitHub
-# Packages registry (@iitd-tech-ambit/protos).
+# Proxy for IITD network
 ARG HTTP_PROXY
 ARG HTTPS_PROXY
-ARG NODE_AUTH_TOKEN
 ENV HTTP_PROXY=$HTTP_PROXY
 ENV HTTPS_PROXY=$HTTPS_PROXY
 
@@ -15,7 +13,7 @@ WORKDIR /app
 RUN npm install -g pm2
 
 # Copy package files
-COPY package*.json .npmrc ./
+COPY package*.json ./
 
 # Install production dependencies only
 RUN npm ci --only=production
@@ -23,6 +21,12 @@ RUN npm ci --only=production
 # Copy source code
 COPY . .
 
+# Proto contracts for the directory.v1 gRPC listener. This service builds from
+# its own context, so it carries a committed copy under protos/ (seeded by the
+# workspace protos/sync.sh). PROTO_DIR mirrors api-gateway/search-api so the
+# loader resolves the same tree in the image.
+COPY protos /app/protos
+ENV PROTO_DIR=/app/protos
 ENV GRPC_BIND_ADDRESS=0.0.0.0:50055
 ENV GRPC_ENABLED=true
 

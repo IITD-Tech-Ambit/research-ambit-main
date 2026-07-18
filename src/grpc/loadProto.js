@@ -1,17 +1,15 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { createRequire } from "node:module";
 import grpc from "@grpc/grpc-js";
 import protoLoader from "@grpc/proto-loader";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const require = createRequire(import.meta.url);
 
-// Proto contracts come from the @iitd-tech-ambit/protos package (published
-// from github.com/IITD-Tech-Ambit/proto-registry). PROTO_DIR overrides for
-// local layouts that don't have it installed as a dependency.
-const PROTO_DIR = process.env.PROTO_DIR ||
-    path.join(path.dirname(require.resolve("@iitd-tech-ambit/protos/package.json")), "proto");
+// protos/ is a committed copy seeded by the workspace protos/sync.sh into this
+// service's build context. The Docker image copies it to /app/protos and sets
+// PROTO_DIR (see Dockerfile), mirroring api-gateway/search-api. Locally it
+// resolves next to src/ at research-ambit-main/protos.
+const PROTO_DIR = process.env.PROTO_DIR || path.resolve(__dirname, "../../protos");
 
 // Same options as api-gateway's loader so both sides agree on field naming
 // (keepCase => snake_case proto field names as written in the .proto).
