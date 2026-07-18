@@ -1,11 +1,13 @@
 # Backend API - Node.js with PM2
 FROM node:20-alpine
 
-# Proxy for IITD network
+# Build-only proxy for npm. This service makes no runtime calls that need the
+# campus proxy (Cloudinary/nodemailer/etc. are public internet, and no code
+# reads HTTP_PROXY/HTTPS_PROXY) — do not bake HTTP_PROXY into the image, or it
+# leaks container-wide (e.g. into Coolify's wget-based health check, which
+# then tries routing its own loopback request through the proxy and fails).
 ARG HTTP_PROXY
 ARG HTTPS_PROXY
-ENV HTTP_PROXY=$HTTP_PROXY
-ENV HTTPS_PROXY=$HTTPS_PROXY
 
 WORKDIR /app
 
