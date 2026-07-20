@@ -107,6 +107,7 @@ export function createKgHandlers(kgService) {
                 baseQ: r.base_q,
                 q: r.q,
                 limit: r.limit,
+                entity: r.entity,
             });
             return {
                 base_query: data.baseQuery || "",
@@ -122,6 +123,7 @@ export function createKgHandlers(kgService) {
                     id: p.id || "",
                     title: p.title || "",
                     theme: p.theme || "",
+                    domain: p.domain || "",
                     department: p.department || "",
                 })),
             };
@@ -152,6 +154,17 @@ export function createKgHandlers(kgService) {
                     department: d.department || "",
                     faculty_count: d.facultyCount ?? 0,
                     paper_count: d.paperCount ?? 0,
+                })),
+                papers: (data.papers || []).map((p) => ({
+                    id: p.id || "",
+                    i: p.i ?? 0,
+                    title: p.title || "",
+                    theme: p.theme || "",
+                    department: p.department || "",
+                })),
+                keywords: (data.keywords || []).map((k) => ({
+                    term: k.term || "",
+                    paper_count: k.paperCount ?? 0,
                 })),
             };
         }),
@@ -231,6 +244,7 @@ export function createKgHandlers(kgService) {
                     id: p.id || "",
                     title: p.title || "",
                     theme: p.theme || "",
+                    domain: p.domain || "",
                     department: p.department || "",
                 })),
             };
@@ -256,6 +270,19 @@ export function createKgHandlers(kgService) {
                         domain: p.domain || "",
                         topic: p.topic || "",
                         citations: p.citations ?? 0,
+                    })),
+                    faculty: (d.faculty || []).map((f) => ({
+                        faculty_id: f.facultyId || "",
+                        name: f.name || "",
+                        paper_count: f.paperCount ?? 0,
+                        papers: (f.papers || []).map((p) => ({
+                            id: p.id || "",
+                            i: p.i ?? 0,
+                            title: p.title || "",
+                            domain: p.domain || "",
+                            topic: p.topic || "",
+                            citations: p.citations ?? 0,
+                        })),
                     })),
                 })),
             };

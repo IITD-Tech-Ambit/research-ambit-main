@@ -300,6 +300,7 @@ export async function getAtlasPoints({ indices } = {}) {
         id: r.id ?? "",
         title: r.title ?? "",
         theme: r.theme ?? "",
+        domain: r.domain ?? "",
         department: r.department ?? "",
         x: r.x,
         y: r.y,
@@ -350,10 +351,11 @@ export async function searchAtlas({ q, limit } = {}) {
  * Resolves the full base set server-side (up to 70k) so nested results are
  * not limited by the client's overlay cap.
  */
-export async function searchAtlasRefine({ baseQ, q, limit } = {}) {
+export async function searchAtlasRefine({ baseQ, q, limit, entity } = {}) {
   const version = await activeVersionOrThrow();
   const baseQuery = String(baseQ ?? "").trim();
   const refineQuery = String(q ?? "").trim();
+  const entityKind = String(entity ?? "").trim().toLowerCase(); // "" | "department" | "faculty"
   const l = Math.min(Number(limit) || 8000, 70000);
 
   if (!baseQuery) {
@@ -386,6 +388,7 @@ export async function searchAtlasRefine({ baseQ, q, limit } = {}) {
           id: p.id || "",
           title: p.title || "",
           theme: p.theme || "",
+          domain: p.domain || "",
           department: p.department || "",
           x: p.x,
           y: p.y,
@@ -398,9 +401,10 @@ export async function searchAtlasRefine({ baseQ, q, limit } = {}) {
 
   const key = kgCacheKey(
     version,
-    "atlas-refine-v1",
+    "atlas-refine-v2",
     baseQuery.toLowerCase(),
     refineQuery.toLowerCase(),
+    entityKind || "any",
     l,
   );
   return cachedData(key, async () => {
@@ -423,42 +427,120 @@ export async function searchAtlasRefine({ baseQ, q, limit } = {}) {
 
     const refineSet = new Set();
 
-    const [textRows, deptRows, fac, dept] = await Promise.all([
-      repo.searchAtlasPointsWithin(version, refineQuery, baseIndices, l),
-      repo.findPointsByDepartmentWithin(version, refineQuery, baseIndices, l),
-      searchAtlasFaculty({ q: refineQuery, limit: 50 }).catch(() => ({
-        data: { indices: [], matches: [] },
-      })),
-      searchAtlasDepartment({ q: refineQuery, limit: 50 }).catch(() => ({
-        data: { indices: [], matches: [] },
-      })),
-    ]);
-
-    for (const row of textRows) refineSet.add(row.i);
-    for (const row of deptRows) refineSet.add(row.i);
-    for (const i of fac.data?.indices ?? []) {
-      if (baseSet.has(i)) refineSet.add(i);
+    // Department / faculty picks must NOT fall through to token text search —
+    // otherwise "Chemical Engineering" matches titles with "Electrochemical"
+    // and domains containing "Engineering" (e.g. Civil papers).
+    let kind = entityKind;
+    if (!kind) {
+      const deptProbe = await searchAtlasDepartment({ q: refineQuery, limit: 5 }).catch(() => null);
+      const exactDept = (deptProbe?.data?.matches ?? []).find(
+        (d) => String(d.department || "").trim().toLowerCase() === refineQuery.toLowerCase(),
+      );
+      if (exactDept) kind = "department";
+      else {
+        const facProbe = await searchAtlasFaculty({ q: refineQuery, limit: 5 }).catch(() => null);
+        const exactFac = (facProbe?.data?.matches ?? []).find(
+          (f) => String(f.name || "").trim().toLowerCase() === refineQuery.toLowerCase(),
+        );
+        if (exactFac) kind = "faculty";
+      }
     }
-    for (const i of dept.data?.indices ?? []) {
-      if (baseSet.has(i)) refineSet.add(i);
+
+    if (kind === "department") {
+      const [deptRows, dept] = await Promise.all([
+        repo.findPointsByDepartmentWithin(version, refineQuery, baseIndices, l),
+        searchAtlasDepartment({ q: refineQuery, limit: 50 }).catch(() => ({
+          data: { indices: [], matches: [] },
+        })),
+      ]);
+      // Prefer exact department name matches from the index when available.
+      const exactMatches = (dept.data?.matches ?? []).filter(
+        (d) => String(d.department || "").trim().toLowerCase() === refineQuery.toLowerCase(),
+      );
+      if (exactMatches.length) {
+        const deptIndex = await repo.getIndexDoc(version, "department-atlas-indices");
+        for (const m of exactMatches) {
+          for (const idx of deptIndex?.[m.department]?.indices ?? []) {
+            if (baseSet.has(idx)) refineSet.add(idx);
+          }
+        }
+      } else {
+        for (const row of deptRows) refineSet.add(row.i);
+        for (const i of dept.data?.indices ?? []) {
+          if (baseSet.has(i)) refineSet.add(i);
+        }
+      }
+    } else if (kind === "faculty") {
+      const fac = await searchAtlasFaculty({ q: refineQuery, limit: 50 }).catch(() => ({
+        data: { indices: [], matches: [] },
+      }));
+      const exact = (fac.data?.matches ?? []).filter(
+        (f) => String(f.name || "").trim().toLowerCase() === refineQuery.toLowerCase(),
+      );
+      const useMatches = exact.length ? exact : (fac.data?.matches ?? []).slice(0, 3);
+      if (useMatches.length) {
+        const ids = useMatches.map((f) => f.facultyId).filter(Boolean);
+        const idxRes = await getFacultyAtlasIndices({ ids }).catch(() => null);
+        for (const i of idxRes?.data?.indices ?? fac.data?.indices ?? []) {
+          if (baseSet.has(i)) refineSet.add(i);
+        }
+      } else {
+        for (const i of fac.data?.indices ?? []) {
+          if (baseSet.has(i)) refineSet.add(i);
+        }
+      }
+    } else {
+      const [textRows, deptRows, fac, dept] = await Promise.all([
+        repo.searchAtlasPointsWithin(version, refineQuery, baseIndices, l),
+        repo.findPointsByDepartmentWithin(version, refineQuery, baseIndices, l),
+        searchAtlasFaculty({ q: refineQuery, limit: 50 }).catch(() => ({
+          data: { indices: [], matches: [] },
+        })),
+        searchAtlasDepartment({ q: refineQuery, limit: 50 }).catch(() => ({
+          data: { indices: [], matches: [] },
+        })),
+      ]);
+
+      for (const row of textRows) refineSet.add(row.i);
+      for (const row of deptRows) refineSet.add(row.i);
+      for (const i of fac.data?.indices ?? []) {
+        if (baseSet.has(i)) refineSet.add(i);
+      }
+      for (const i of dept.data?.indices ?? []) {
+        if (baseSet.has(i)) refineSet.add(i);
+      }
     }
 
     const indices = [...refineSet].slice(0, l);
-    const points = indices.length
+    let points = indices.length
       ? await repo.getPointsByIndices(version, indices)
       : [];
+
+    // Hard filter: drop papers explicitly tagged to a different department.
+    // Keep untagged papers that came from the department index.
+    if (kind === "department") {
+      const want = refineQuery.toLowerCase();
+      points = points.filter((p) => {
+        const d = String(p.department || "").trim().toLowerCase();
+        if (!d) return true;
+        return d === want || d.includes(want) || want.includes(d);
+      });
+    }
+
+    const finalIndices = kind === "department" ? points.map((p) => p.i) : indices;
 
     return {
       baseQuery,
       query: refineQuery,
       baseCount,
-      matchCount: indices.length,
-      indices,
+      matchCount: finalIndices.length,
+      indices: finalIndices,
       points: points.map((p) => ({
         i: p.i,
         id: p.id || "",
         title: p.title || "",
         theme: p.theme || "",
+        domain: p.domain || "",
         department: p.department || "",
         x: p.x,
         y: p.y,
@@ -619,12 +701,111 @@ async function browseTopDepartments(version, limit) {
 /**
  * Blended atlas search suggestions for the knowledge-graph UI: themes, topics,
  * faculty, and departments. Read-only — reuses explore terms + existing indices.
+ *
+ * For free-text topics (e.g. "carbon") that do not appear in theme/faculty names,
+ * also mines matching papers and surfaces the themes / topics / departments
+ * that those papers belong to — so the dropdown stays useful for research topics.
  */
+// Safety cap on how many title/abstract paper matches we resolve to atlas dots.
+// This is not a "top N" display limit — the atlas overlay highlights all of
+// them; the dropdown itself only renders a handful.
+const PAPER_SUGGEST_CAP = 500;
+
+/**
+ * Papers whose title or abstract match the query (Scopus text index), narrowed
+ * to those actually plotted on the atlas. Ordered by text relevance (title
+ * weighted far above abstract by the Scopus text index weights).
+ */
+async function findAtlasPapersByTitleAbstract(version, query, cap = PAPER_SUGGEST_CAP) {
+  const q = String(query ?? "").trim();
+  if (!q) return [];
+  const metaRows = await ResearchMetaDataScopus.find(
+    { $text: { $search: q } },
+    { _id: 1, title: 1, score: { $meta: "textScore" } },
+  )
+    .sort({ score: { $meta: "textScore" } })
+    .limit(cap)
+    .lean()
+    .catch(() => []);
+  if (!metaRows.length) return [];
+
+  const idOrder = metaRows.map((r) => String(r._id));
+  const titleById = new Map(metaRows.map((r) => [String(r._id), r.title]));
+  const points = await repo.findAtlasPointsByPaperIds(version, idOrder);
+  const pointById = new Map(points.map((p) => [String(p.id), p]));
+
+  const papers = [];
+  for (const id of idOrder) {
+    const p = pointById.get(id);
+    if (!p) continue; // Not on the atlas — skip.
+    papers.push({
+      id,
+      i: p.i,
+      title: p.title || titleById.get(id) || "",
+      theme: p.theme || "",
+      department: p.department || "",
+    });
+  }
+  return papers;
+}
+
+// Common words we never want as a keyword suggestion head/tail.
+const KEYWORD_STOPWORDS = new Set([
+  "the", "a", "an", "of", "and", "or", "for", "to", "in", "on", "at", "with",
+  "by", "using", "used", "use", "based", "via", "from", "into", "over", "under",
+  "new", "novel", "study", "studies", "analysis", "approach", "approaches",
+  "effect", "effects", "role", "review", "toward", "towards", "between", "their",
+  "its", "this", "that", "these", "those", "as", "is", "are", "be", "we", "our",
+]);
+
+/**
+ * Build short keyword/phrase completions (e.g. "carbon" → "carbon dioxide",
+ * "carbon fiber") from matching paper titles. Phrases start at the token that
+ * prefix-matches the query's last token, extend up to 3 words, and are ranked
+ * by how many titles contain them.
+ */
+function extractKeywordSuggestions(query, papers, limit) {
+  const q = String(query ?? "").trim().toLowerCase();
+  const qTokens = q.split(/[^a-z0-9]+/).filter(Boolean);
+  if (!qTokens.length || !papers?.length) return [];
+  const head = qTokens[qTokens.length - 1];
+
+  const counts = new Map();
+  const bump = (phrase) => counts.set(phrase, (counts.get(phrase) ?? 0) + 1);
+
+  for (const p of papers) {
+    const words = String(p.title ?? "")
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter(Boolean);
+    for (let i = 0; i < words.length; i++) {
+      if (!words[i].startsWith(head) || words[i].length < 2) continue;
+      let phrase = words[i];
+      const seen = new Set([phrase]);
+      bump(phrase);
+      for (let len = 1; len <= 2; len++) {
+        const next = words[i + len];
+        if (!next || KEYWORD_STOPWORDS.has(next) || next.length < 2) break;
+        phrase = `${phrase} ${next}`;
+        if (seen.has(phrase)) break;
+        seen.add(phrase);
+        bump(phrase);
+      }
+    }
+  }
+
+  return [...counts.entries()]
+    .filter(([term]) => !KEYWORD_STOPWORDS.has(term))
+    .sort((a, b) => b[1] - a[1] || a[0].length - b[0].length || a[0].localeCompare(b[0]))
+    .slice(0, limit)
+    .map(([term, count]) => ({ term, paperCount: count }));
+}
+
 export async function searchAtlasSuggest({ q, limit } = {}) {
   const version = await activeVersionOrThrow();
   const query = String(q ?? "").trim();
   const perGroup = Math.min(Number(limit) || 8, 20);
-  const key = kgCacheKey(version, "atlas-suggest", query.toLowerCase(), perGroup);
+  const key = kgCacheKey(version, "atlas-suggest-v5", query.toLowerCase(), perGroup);
 
   return cachedData(key, async () => {
     if (!query) {
@@ -639,43 +820,124 @@ export async function searchAtlasSuggest({ q, limit } = {}) {
       ]);
       return {
         query: "",
+        keywords: [],
         themes: themeRows.map(mapSuggestTerm),
         topics: topicRows.map(mapSuggestTerm),
         faculty,
         departments,
+        papers: [],
+        paperMatchCount: 0,
       };
     }
 
     const termFilter = { term: { $regex: escapeRegex(query), $options: "i" } };
-    const [termRows, facultyResult, deptResult] = await Promise.all([
+    const [termRows, facultyResult, deptResult, paperHits, titlePapers] = await Promise.all([
       repo.findExploreTerms(version, termFilter, perGroup * 4),
       searchAtlasFaculty({ q: query, limit: perGroup }),
       searchAtlasDepartment({ q: query, limit: Math.ceil(perGroup / 2) }),
+      // Sample papers matching the topic so we can rank related taxonomy.
+      repo.searchAtlasPoints(version, query, Math.min(1200, perGroup * 150)).catch(() => []),
+      // Direct paper matches from title/abstract — surfaced as their own group.
+      findAtlasPapersByTitleAbstract(version, query),
     ]);
 
     const themes = [];
     const topics = [];
+    const seenTheme = new Set();
+    const seenTopic = new Set();
     for (const row of termRows) {
-      if (row.type === "theme" && themes.length < perGroup) themes.push(mapSuggestTerm(row));
-      else if (row.type === "topic" && topics.length < perGroup) topics.push(mapSuggestTerm(row));
+      if (row.type === "theme" && themes.length < perGroup) {
+        themes.push(mapSuggestTerm(row));
+        seenTheme.add(String(row.term || "").toLowerCase());
+      } else if (row.type === "topic" && topics.length < perGroup) {
+        topics.push(mapSuggestTerm(row));
+        seenTopic.add(String(row.term || "").toLowerCase());
+      }
     }
+
+    const faculty = (facultyResult.data?.matches ?? []).map((f) => ({
+      facultyId: f.facultyId,
+      name: f.name,
+      department: f.department,
+      paperCount: f.paperCount ?? 0,
+      atlasCount: f.atlasCount ?? 0,
+    }));
+
+    const departments = (deptResult.data?.matches ?? []).map((d) => ({
+      department: d.department,
+      facultyCount: d.facultyCount ?? 0,
+      paperCount: d.atlasCount ?? 0,
+    }));
+    const seenDept = new Set(departments.map((d) => d.department.toLowerCase()));
+
+    const paperMatchCount = paperHits.length;
+    if (paperHits.length) {
+      const indices = paperHits.map((r) => r.i);
+      const points = await repo.getPointsByIndices(version, indices.slice(0, 800));
+      const themeCounts = new Map();
+      const topicCounts = new Map();
+      for (const p of points) {
+        const theme = String(p.theme || "").trim();
+        const topic = String(p.topic || "").trim();
+        if (theme) themeCounts.set(theme, (themeCounts.get(theme) ?? 0) + 1);
+        if (topic) topicCounts.set(topic, (topicCounts.get(topic) ?? 0) + 1);
+      }
+
+      const relatedThemes = [...themeCounts.entries()]
+        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+      for (const [label, count] of relatedThemes) {
+        if (themes.length >= perGroup) break;
+        const keyL = label.toLowerCase();
+        if (seenTheme.has(keyL)) continue;
+        seenTheme.add(keyL);
+        themes.push({
+          kind: "theme",
+          key: `related-theme:${label}`,
+          label,
+          paperCount: count,
+          facultyCount: 0,
+          deptCount: 0,
+        });
+      }
+
+      const relatedTopics = [...topicCounts.entries()]
+        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+      for (const [label, count] of relatedTopics) {
+        if (topics.length >= perGroup) break;
+        const keyL = label.toLowerCase();
+        if (seenTopic.has(keyL)) continue;
+        // Skip topics that don't relate to the query at all when we already have name hits;
+        // for keyword queries, any frequent topic in matching papers is useful context.
+        seenTopic.add(keyL);
+        topics.push({
+          kind: "topic",
+          key: `related-topic:${label}`,
+          label,
+          paperCount: count,
+          facultyCount: 0,
+          deptCount: 0,
+        });
+      }
+
+      // NOTE: We intentionally do NOT inject paper-derived "related" departments.
+      // Departments are prioritised at the top of the dropdown, so only genuine
+      // name matches belong in this list; otherwise a topic query like "carbon"
+      // (no department named carbon) would surface loosely-related departments
+      // and bury the keyword suggestions. When there's no name match, the keyword
+      // group carries the "related to your search" role.
+    }
+
+    const keywords = extractKeywordSuggestions(query, titlePapers, perGroup);
 
     return {
       query,
+      keywords,
       themes,
       topics,
-      faculty: (facultyResult.data?.matches ?? []).map((f) => ({
-        facultyId: f.facultyId,
-        name: f.name,
-        department: f.department,
-        paperCount: f.paperCount ?? 0,
-        atlasCount: f.atlasCount ?? 0,
-      })),
-      departments: (deptResult.data?.matches ?? []).map((d) => ({
-        department: d.department,
-        facultyCount: d.facultyCount ?? 0,
-        paperCount: d.atlasCount ?? 0,
-      })),
+      faculty,
+      departments,
+      papers: titlePapers,
+      paperMatchCount,
     };
   });
 }
@@ -732,6 +994,52 @@ export async function searchAtlasDepartment({ q, limit } = {}) {
 }
 
 /** Theme cluster breakdown: departments + papers matching search within a theme. */
+function formatClusterPaper(paper) {
+  return {
+    id: paper.id,
+    i: paper.i,
+    title: paper.title,
+    domain: paper.domain ?? "",
+    topic: paper.topic ?? "",
+    citations: paper.citations ?? 0,
+  };
+}
+
+/**
+ * Nest faculty under a department using the faculty atlas indices.
+ * Only professors belonging to that department whose papers appear in
+ * `deptIndices` are included — one browse level below the department.
+ */
+function nestFacultyForDepartment(department, deptIndices, paperByI, searchIndex, indicesMap, paperLimit) {
+  const deptNorm = String(department || "").trim().toLowerCase();
+  if (!deptNorm || deptNorm === "unassigned" || !searchIndex?.length || !indicesMap) {
+    return [];
+  }
+  const faculty = [];
+  for (const f of searchIndex) {
+    if (String(f.department || "").trim().toLowerCase() !== deptNorm) continue;
+    const facIndices = indicesMap[f.facultyId] ?? [];
+    const overlap = [];
+    for (const idx of facIndices) {
+      if (deptIndices.has(idx)) overlap.push(idx);
+    }
+    if (!overlap.length) continue;
+    faculty.push({
+      facultyId: f.facultyId,
+      name: f.name,
+      paperCount: overlap.length,
+      papers: overlap
+        .slice(0, paperLimit)
+        .map((i) => paperByI.get(i))
+        .filter(Boolean)
+        .map(formatClusterPaper),
+    });
+  }
+  return faculty.sort(
+    (a, b) => b.paperCount - a.paperCount || a.name.localeCompare(b.name),
+  );
+}
+
 export async function getAtlasClusterBreakdown({ theme, q, paperLimit } = {}) {
   const version = await activeVersionOrThrow();
   const themeVal = String(theme ?? "").trim();
@@ -742,9 +1050,14 @@ export async function getAtlasClusterBreakdown({ theme, q, paperLimit } = {}) {
     return { data: { theme: themeVal, query, totalPapers: 0, departments: [] }, cached: false };
   }
 
-  const key = kgCacheKey(version, "cluster-breakdown", themeVal, query, l);
+  // v2: departments → faculty → papers
+  const key = kgCacheKey(version, "cluster-breakdown-v2", themeVal, query, l);
   return cachedData(key, async () => {
-    const deptIndex = await repo.getIndexDoc(version, "department-atlas-indices");
+    const [deptIndex, searchIndex, indicesMap] = await Promise.all([
+      repo.getIndexDoc(version, "department-atlas-indices"),
+      repo.getIndexDoc(version, "faculty-search-index"),
+      repo.getIndexDoc(version, "faculty-atlas-indices"),
+    ]);
     /** @type {Map<number, string[]>} */
     const idxToDepts = new Map();
     if (deptIndex) {
@@ -759,8 +1072,9 @@ export async function getAtlasClusterBreakdown({ theme, q, paperLimit } = {}) {
 
     // Fetch enough matches to fill per-department buckets. Cap generous but bounded.
     const points = await repo.findThemePoints(version, themeVal, query, Math.max(l * 8, 2000));
+    const paperByI = new Map(points.map((p) => [p.i, p]));
 
-    /** @type {Map<string, { paperCount: number; papers: object[] }>} */
+    /** @type {Map<string, { paperCount: number; papers: object[]; indices: Set<number> }>} */
     const byDept = new Map();
     let totalPapers = 0;
 
@@ -773,19 +1087,13 @@ export async function getAtlasClusterBreakdown({ theme, q, paperLimit } = {}) {
       for (const dept of deptNames) {
         let entry = byDept.get(dept);
         if (!entry) {
-          entry = { paperCount: 0, papers: [] };
+          entry = { paperCount: 0, papers: [], indices: new Set() };
           byDept.set(dept, entry);
         }
         entry.paperCount += 1;
+        entry.indices.add(paper.i);
         if (entry.papers.length < l) {
-          entry.papers.push({
-            id: paper.id,
-            i: paper.i,
-            title: paper.title,
-            domain: paper.domain ?? "",
-            topic: paper.topic ?? "",
-            citations: paper.citations ?? 0,
-          });
+          entry.papers.push(formatClusterPaper(paper));
         }
       }
     }
@@ -794,6 +1102,15 @@ export async function getAtlasClusterBreakdown({ theme, q, paperLimit } = {}) {
       .map(([department, entry]) => ({
         department,
         paperCount: entry.paperCount,
+        faculty: nestFacultyForDepartment(
+          department,
+          entry.indices,
+          paperByI,
+          searchIndex,
+          indicesMap,
+          l,
+        ),
+        // Flat paper list kept as fallback when a department has no faculty matches.
         papers: entry.papers,
       }))
       .sort((a, b) => b.paperCount - a.paperCount || a.department.localeCompare(b.department));

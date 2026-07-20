@@ -168,11 +168,15 @@ export async function searchAtlasPoints(version, query, limit) {
 const IN_CHUNK = 4000;
 
 function tokenizeQuery(query) {
+  // Split on any run of non-alphanumeric chars (hyphen kept for hyphenated
+  // terms). Splitting — rather than stripping punctuation inside a token —
+  // matters for queries like "AI/ML": stripping produced "aiml" (which never
+  // matches the stored "AI/ML" text), whereas splitting yields ["ai","ml"],
+  // both of which the AND clauses can match.
   return String(query)
     .trim()
     .toLowerCase()
-    .split(/\s+/)
-    .map((t) => t.replace(/[^\p{L}\p{N}-]+/gu, ""))
+    .split(/[^\p{L}\p{N}-]+/u)
     .filter((t) => t.length >= 2);
 }
 
@@ -258,8 +262,32 @@ export async function getPointsByIndices(version, indices) {
   if (!version || !indices?.length) return [];
   return AtlasPoint.find(
     { version, i: { $in: indices } },
-    { _id: 0, i: 1, id: 1, title: 1, theme: 1, department: 1, x: 1, y: 1, z: 1 },
+    { _id: 0, i: 1, id: 1, title: 1, theme: 1, domain: 1, department: 1, x: 1, y: 1, z: 1 },
   ).lean();
+}
+
+/**
+ * Atlas points for a set of paper ids (Scopus _id hex strings). Used to keep
+ * only title/abstract paper matches that are actually plotted on the atlas.
+ */
+export async function findAtlasPointsByPaperIds(version, ids) {
+  if (!version || !ids?.length) return [];
+  const out = [];
+  const seen = new Set();
+  for (let off = 0; off < ids.length; off += IN_CHUNK) {
+    const chunk = ids.slice(off, off + IN_CHUNK);
+    const rows = await AtlasPoint.find(
+      { version, id: { $in: chunk } },
+      { _id: 0, i: 1, id: 1, title: 1, theme: 1, domain: 1, department: 1 },
+    ).lean();
+    for (const row of rows) {
+      const key = String(row.id);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(row);
+    }
+  }
+  return out;
 }
 
 /** Papers in a theme matching a query — powers the cluster breakdown. */
