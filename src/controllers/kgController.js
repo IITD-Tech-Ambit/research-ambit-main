@@ -97,6 +97,7 @@ kg.searchAtlasRefine = asyncErrorHandler(async (req, res) => {
     q: req.query.q,
     limit: req.query.limit,
     entity: req.query.entity,
+    baseEntity: req.query.baseEntity,
   }));
 });
 

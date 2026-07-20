@@ -346,12 +346,77 @@ export async function searchAtlas({ q, limit } = {}) {
 }
 
 /**
+ * Authoritative atlas indices for a primary/base query. Exact department or
+ * faculty names use KG indexes (faculty-linked papers), not title text search.
+ */
+async function resolveBaseAtlasIndices(version, baseQuery, baseEntityKind = "", limit = 70000) {
+  const q = String(baseQuery ?? "").trim();
+  const kind = String(baseEntityKind ?? "").trim().toLowerCase();
+  const l = Math.min(Number(limit) || 70000, 70000);
+  if (!q) return { indices: [], baseCount: 0, cached: false };
+
+  if (kind === "department") {
+    const dept = await getDepartmentAtlasIndices({ departments: [q] });
+    const indices = dept.data?.indices ?? [];
+    return { indices, baseCount: indices.length, cached: dept.cached };
+  }
+  if (kind === "faculty") {
+    const fac = await searchAtlasFaculty({ q, limit: 20 }).catch(() => ({
+      data: { indices: [], matches: [] },
+      cached: false,
+    }));
+    const exact = (fac.data?.matches ?? []).filter(
+      (f) => String(f.name || "").trim().toLowerCase() === q.toLowerCase(),
+    );
+    const use = exact.length ? exact : (fac.data?.matches ?? []).slice(0, 3);
+    if (use.length) {
+      const ids = use.map((f) => f.facultyId).filter(Boolean);
+      const idxRes = await getFacultyAtlasIndices({ ids }).catch(() => null);
+      const indices = idxRes?.data?.indices?.length
+        ? idxRes.data.indices
+        : (fac.data?.indices ?? []);
+      return { indices, baseCount: indices.length, cached: fac.cached };
+    }
+  }
+
+  const deptProbe = await searchAtlasDepartment({ q, limit: 5 }).catch(() => null);
+  const exactDept = (deptProbe?.data?.matches ?? []).find(
+    (d) => String(d.department || "").trim().toLowerCase() === q.toLowerCase(),
+  );
+  if (exactDept) {
+    const dept = await getDepartmentAtlasIndices({ departments: [exactDept.department] });
+    const indices = dept.data?.indices ?? [];
+    return { indices, baseCount: indices.length, cached: dept.cached };
+  }
+
+  const facProbe = await searchAtlasFaculty({ q, limit: 5 }).catch(() => null);
+  const exactFac = (facProbe?.data?.matches ?? []).find(
+    (f) => String(f.name || "").trim().toLowerCase() === q.toLowerCase(),
+  );
+  if (exactFac?.facultyId) {
+    const idxRes = await getFacultyAtlasIndices({ ids: [exactFac.facultyId] }).catch(() => null);
+    const indices = idxRes?.data?.indices?.length
+      ? idxRes.data.indices
+      : (facProbe?.data?.indices ?? []);
+    return { indices, baseCount: indices.length, cached: facProbe?.cached ?? false };
+  }
+
+  const base = await searchAtlas({ q, limit: l });
+  const indices = base.data?.indices ?? [];
+  return {
+    indices,
+    baseCount: base.data?.matchCount ?? indices.length,
+    cached: base.cached,
+  };
+}
+
+/**
  * Nested / refine-within search: papers that match `baseQ` AND also match
  * the refine term via text, department, or faculty/department indexes.
  * Resolves the full base set server-side (up to 70k) so nested results are
  * not limited by the client's overlay cap.
  */
-export async function searchAtlasRefine({ baseQ, q, limit, entity } = {}) {
+export async function searchAtlasRefine({ baseQ, q, limit, entity, baseEntity } = {}) {
   const version = await activeVersionOrThrow();
   const baseQuery = String(baseQ ?? "").trim();
   const refineQuery = String(q ?? "").trim();
@@ -372,15 +437,17 @@ export async function searchAtlasRefine({ baseQ, q, limit, entity } = {}) {
     };
   }
 
+  const baseEntityKind = String(baseEntity ?? "").trim().toLowerCase();
+
   if (!refineQuery) {
-    const base = await searchAtlas({ q: baseQuery, limit: l });
-    const indices = base.data.indices ?? [];
+    const base = await resolveBaseAtlasIndices(version, baseQuery, baseEntityKind, l);
+    const indices = base.indices ?? [];
     const points = await repo.getPointsByIndices(version, indices);
     return {
       data: {
         baseQuery,
         query: "",
-        baseCount: base.data.matchCount ?? indices.length,
+        baseCount: base.baseCount ?? indices.length,
         matchCount: indices.length,
         indices,
         points: points.map((p) => ({
@@ -401,18 +468,19 @@ export async function searchAtlasRefine({ baseQ, q, limit, entity } = {}) {
 
   const key = kgCacheKey(
     version,
-    "atlas-refine-v2",
+    "atlas-refine-v3",
     baseQuery.toLowerCase(),
     refineQuery.toLowerCase(),
     entityKind || "any",
+    baseEntityKind || "auto",
     l,
   );
   return cachedData(key, async () => {
     // Resolve the authoritative base set (not capped at the UI overlay size).
-    const base = await searchAtlas({ q: baseQuery, limit: 70000 });
-    const baseIndices = base.data.indices ?? [];
+    const base = await resolveBaseAtlasIndices(version, baseQuery, baseEntityKind, 70000);
+    const baseIndices = base.indices ?? [];
     const baseSet = new Set(baseIndices);
-    const baseCount = base.data.matchCount ?? baseIndices.length;
+    const baseCount = base.baseCount ?? baseIndices.length;
 
     if (!baseIndices.length) {
       return {
@@ -975,8 +1043,14 @@ export async function searchAtlasDepartment({ q, limit } = {}) {
       })
       .slice(0, l);
 
+    // Exact department name → only that department's papers. Token matching
+    // otherwise pulls in siblings (e.g. "Chemical Engineering" also hits
+    // "Biochemical Engineering & Biotechnology" via includes("chemical")).
+    const exact = matched.filter(([name]) => name.toLowerCase() === query);
+    const useRows = exact.length ? exact : matched;
+
     const indices = new Set();
-    for (const [, entry] of matched) {
+    for (const [, entry] of useRows) {
       for (const idx of entry.indices) indices.add(idx);
     }
 

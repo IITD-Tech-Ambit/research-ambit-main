@@ -108,6 +108,7 @@ export function createKgHandlers(kgService) {
                 q: r.q,
                 limit: r.limit,
                 entity: r.entity,
+                baseEntity: r.base_entity,
             });
             return {
                 base_query: data.baseQuery || "",
