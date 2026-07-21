@@ -57,8 +57,18 @@ export function aggregateFaculties(pipeline) {
 }
 
 export function groupFacultyCountsByDepartment() {
+    // Count by directory unit: home department plus any school/centre
+    // affiliations, so dual-affiliated faculty appear under both.
     return Faculty.aggregate([
-        { $group: { _id: "$department", totalFaculty: { $sum: 1 } } }
+        {
+            $project: {
+                units: {
+                    $setUnion: [["$department"], { $ifNull: ["$affiliations", []] }]
+                }
+            }
+        },
+        { $unwind: "$units" },
+        { $group: { _id: "$units", totalFaculty: { $sum: 1 } } }
     ]);
 }
 

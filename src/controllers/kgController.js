@@ -119,6 +119,12 @@ kg.getDepartmentAtlasIndices = asyncErrorHandler(async (req, res) => {
   return sendKg(res, await kgService.getDepartmentAtlasIndices({ departments }));
 });
 
+kg.getAtlasYearIndices = asyncErrorHandler(async (req, res) => {
+  return sendKg(res, await kgService.getAtlasYearIndices({
+    sinceYear: req.query.sinceYear,
+  }));
+});
+
 kg.searchAtlasDepartment = asyncErrorHandler(async (req, res) => {
   return sendKg(res, await kgService.searchAtlasDepartment({ q: req.query.q, limit: req.query.limit }));
 });

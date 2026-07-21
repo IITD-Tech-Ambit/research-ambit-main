@@ -204,6 +204,15 @@ export function createKgHandlers(kgService) {
             };
         }),
 
+        GetAtlasYearIndices: unary(async ({ request: r }) => {
+            const { data } = await kgService.getAtlasYearIndices({ sinceYear: r.since_year });
+            return {
+                since_year: data.sinceYear ?? 0,
+                match_count: data.matchCount ?? 0,
+                indices: data.indices || [],
+            };
+        }),
+
         SearchAtlasDepartment: unary(async ({ request: r }) => {
             const { data } = await kgService.searchAtlasDepartment({ q: r.q, limit: r.limit });
             return {

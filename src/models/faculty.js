@@ -40,6 +40,13 @@ const facultySchema = new mongoose.Schema({
         ref:'Department',
         required:true
     },
+    // Secondary units (Schools / Centres) the faculty also belongs to.
+    // `department` stays the home department; the directory lists the same
+    // faculty (same profile) under every unit in department ∪ affiliations.
+    affiliations:[{
+        type:mongoose.Schema.Types.ObjectId,
+        ref:'Department'
+    }],
     profile_image_url:{
         type:String,
     },
@@ -93,6 +100,7 @@ facultySchema.index({
 });
 
 facultySchema.index({ department: 1 });
+facultySchema.index({ affiliations: 1 });
 facultySchema.index({ firstName: 1, lastName: 1 });
 facultySchema.index({ email: 1 });
 

@@ -730,6 +730,29 @@ export async function getDepartmentAtlasIndices({ departments } = {}) {
   });
 }
 
+/** Paper atlas indices published on or after a calendar year. */
+export async function getAtlasYearIndices({ sinceYear } = {}) {
+  const version = await activeVersionOrThrow();
+  const year = Number.parseInt(String(sinceYear ?? ""), 10);
+  const currentYear = new Date().getUTCFullYear();
+  if (!Number.isInteger(year) || year < 1900 || year > currentYear + 1) {
+    return {
+      data: { sinceYear: 0, matchCount: 0, indices: [] },
+      cached: false,
+    };
+  }
+
+  const key = kgCacheKey(version, "atlas-year-indices", year);
+  return cachedData(key, async () => {
+    const rows = await repo.getPointIndicesSinceYear(version, year);
+    return {
+      sinceYear: year,
+      matchCount: rows.length,
+      indices: rows.map((row) => row.i),
+    };
+  });
+}
+
 function mapSuggestTerm(row) {
   return {
     kind: row.type,

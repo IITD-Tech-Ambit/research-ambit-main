@@ -276,6 +276,7 @@ def build_atlas(papers):
                 "subdomain": "",
                 "topic": "",
                 "department": paper["department"],
+                "year": paper["year"],
                 "citations": paper["citation_count"],
                 "x": x,
                 "y": y,

@@ -90,6 +90,7 @@ const atlasPointSchema = new Schema(
     subdomain: { type: String },
     topic: { type: String },
     department: { type: String },
+    year: { type: Number },
     citations: { type: Number, default: 0 },
     x: { type: Number },
     y: { type: Number },
@@ -99,6 +100,7 @@ const atlasPointSchema = new Schema(
 );
 atlasPointSchema.index({ version: 1, i: 1 }, { unique: true });
 atlasPointSchema.index({ version: 1, theme: 1 });
+atlasPointSchema.index({ version: 1, year: 1 });
 atlasPointSchema.index(
   { title: "text", theme: "text", domain: "text", subdomain: "text", topic: "text" },
   { name: "atlas_point_text", weights: { title: 5, topic: 4, subdomain: 3, domain: 2, theme: 1 } },

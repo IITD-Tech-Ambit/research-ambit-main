@@ -8,8 +8,13 @@ import {
     formatDirectoryFacultyCards,
     formatGroupedFaculties,
     DIRECTORY_CATEGORY_MAP,
-    buildGroupedCategoryMatch
+    buildGroupedCategoryMatch,
+    facultyUnitsExpandStages
 } from "../domain/facultyDirectory.js";
+import {
+    getDepartmentRosterIds,
+    buildDepartmentRosterMatchStage
+} from "../domain/departmentSheetRoster.js";
 import { CACHE_TTL_S, cachedPayload } from "./directoryCache.js";
 import * as repo from "./directoryRepository.js";
 
@@ -112,6 +117,16 @@ export const getFacultiesGroupedByDepartment = async ({ category, summaryOnly } 
                 }
             }
 
+            // The Departments tab shows only sheet-verified faculty (see
+            // departmentSheetRoster.js), so its counts must match that roster.
+            // The "All" tab keeps full DB counts.
+            if (cat === "departments") {
+                for (const group of merged.values()) {
+                    const rosterIds = getDepartmentRosterIds(group._id);
+                    if (rosterIds) group.stats.totalFaculty = rosterIds.length;
+                }
+            }
+
             const departments = [...merged.values()].sort((a, b) =>
                 a.department.name.localeCompare(b.department.name)
             );
@@ -145,13 +160,36 @@ export const getFacultiesGroupedByDepartment = async ({ category, summaryOnly } 
                     data: { departments: [], totalDepartments: 0, totalFaculty: 0 }
                 };
             }
-            preMatchStage = { $match: { department: { $in: values } } };
+            // A faculty belongs to a category's units via either its home
+            // department or a school/centre affiliation.
+            preMatchStage = {
+                $match: {
+                    $or: [
+                        { department: { $in: values } },
+                        { affiliations: { $in: values } }
+                    ]
+                }
+            };
         }
 
         const pipeline = [
             ...(preMatchStage ? [preMatchStage] : []),
-            departmentLookupStage,
+            // Expand each faculty into one row per unit (department +
+            // affiliations) so dual-affiliated faculty appear in every unit
+            // they belong to, with the same profile data.
+            ...facultyUnitsExpandStages,
             { $unwind: "$department" },
+            // The expansion emits rows for all of a faculty's units; keep
+            // only units of the requested category (e.g. drop the home
+            // department row when browsing schools/centres).
+            ...(categoryDbValue
+                ? [{ $match: { "department.category": categoryDbValue } }]
+                : []),
+            // Departments tab lists only sheet-verified faculty per unit;
+            // everyone else in the DB remains visible on the "All" tab.
+            ...(cat === "departments" && buildDepartmentRosterMatchStage()
+                ? [buildDepartmentRosterMatchStage()]
+                : []),
             { $sort: { "department.name": 1, h_index: -1 } },
             {
                 $group: {
@@ -222,12 +260,20 @@ export const getFacultiesForDepartmentGroup = async ({ departmentId, category } 
         // instead of joining the whole collection first and filtering after.
         const departmentMatchClauses = [
             { department: departmentObjectId },
-            { department: String(departmentObjectId) }
+            { department: String(departmentObjectId) },
+            { affiliations: departmentObjectId }
         ];
         if (department.code) departmentMatchClauses.push({ department: department.code });
 
+        // When browsing the Departments tab, restrict a department's page to
+        // its sheet-verified roster; "all" and other categories are unfiltered.
+        const rosterIds = cat === "departments" ? getDepartmentRosterIds(departmentObjectId) : null;
+        const facultyMatch = rosterIds
+            ? { $and: [{ $or: departmentMatchClauses }, { _id: { $in: rosterIds } }] }
+            : { $or: departmentMatchClauses };
+
         const facultiesRaw = await repo.aggregateFaculties([
-            { $match: { $or: departmentMatchClauses } },
+            { $match: facultyMatch },
             { $sort: { h_index: -1, _id: 1 } },
             { $project: facultyCardProjectFields }
         ]);
