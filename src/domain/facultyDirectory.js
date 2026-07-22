@@ -233,6 +233,48 @@ export const findDepartmentByReference = async (reference) => {
 
 export const escapeRegex = (input = "") => input.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+/**
+ * Aggregation stages that expand a faculty row into one row per directory
+ * unit it belongs to (home `department` plus every entry in `affiliations`),
+ * then resolve each unit to its department document under the `department`
+ * key so the downstream card/group stages work unchanged. Tolerates the same
+ * legacy department encodings (code string / stringified id) as
+ * departmentLookupStage.
+ */
+export const facultyUnitsExpandStages = [
+    {
+        $addFields: {
+            __unit: {
+                $setUnion: [["$department"], { $ifNull: ["$affiliations", []] }]
+            }
+        }
+    },
+    { $unwind: "$__unit" },
+    {
+        $lookup: {
+            from: "departments",
+            let: {
+                unitRef: "$__unit",
+                unitRefStr: { $toString: "$__unit" }
+            },
+            pipeline: [
+                {
+                    $match: {
+                        $expr: {
+                            $or: [
+                                { $eq: ["$code", "$$unitRef"] },
+                                { $eq: ["$code", "$$unitRefStr"] },
+                                { $eq: [{ $toString: "$_id" }, "$$unitRefStr"] }
+                            ]
+                        }
+                    }
+                }
+            ],
+            as: "department"
+        }
+    }
+];
+
 export const departmentLookupStage = {
     $lookup: {
         from: "departments",

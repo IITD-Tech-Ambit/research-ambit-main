@@ -97,6 +97,7 @@ kg.searchAtlasRefine = asyncErrorHandler(async (req, res) => {
     q: req.query.q,
     limit: req.query.limit,
     entity: req.query.entity,
+    baseEntity: req.query.baseEntity,
   }));
 });
 
@@ -116,6 +117,12 @@ kg.searchAtlasFaculty = asyncErrorHandler(async (req, res) => {
 kg.getDepartmentAtlasIndices = asyncErrorHandler(async (req, res) => {
   const departments = String(req.query.departments ?? "").split("|");
   return sendKg(res, await kgService.getDepartmentAtlasIndices({ departments }));
+});
+
+kg.getAtlasYearIndices = asyncErrorHandler(async (req, res) => {
+  return sendKg(res, await kgService.getAtlasYearIndices({
+    sinceYear: req.query.sinceYear,
+  }));
 });
 
 kg.searchAtlasDepartment = asyncErrorHandler(async (req, res) => {

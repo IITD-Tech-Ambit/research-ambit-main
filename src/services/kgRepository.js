@@ -266,6 +266,15 @@ export async function getPointsByIndices(version, indices) {
   ).lean();
 }
 
+/** Atlas indices published on or after `sinceYear`. */
+export async function getPointIndicesSinceYear(version, sinceYear) {
+  if (!version || !Number.isInteger(sinceYear)) return [];
+  return AtlasPoint.find(
+    { version, year: { $gte: sinceYear } },
+    { _id: 0, i: 1 },
+  ).lean();
+}
+
 /**
  * Atlas points for a set of paper ids (Scopus _id hex strings). Used to keep
  * only title/abstract paper matches that are actually plotted on the atlas.

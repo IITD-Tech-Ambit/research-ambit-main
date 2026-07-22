@@ -108,6 +108,7 @@ export function createKgHandlers(kgService) {
                 q: r.q,
                 limit: r.limit,
                 entity: r.entity,
+                baseEntity: r.base_entity,
             });
             return {
                 base_query: data.baseQuery || "",
@@ -198,6 +199,15 @@ export function createKgHandlers(kgService) {
             const { data } = await kgService.getDepartmentAtlasIndices({ departments: r.departments });
             return {
                 departments: data.departments || [],
+                match_count: data.matchCount ?? 0,
+                indices: data.indices || [],
+            };
+        }),
+
+        GetAtlasYearIndices: unary(async ({ request: r }) => {
+            const { data } = await kgService.getAtlasYearIndices({ sinceYear: r.since_year });
+            return {
+                since_year: data.sinceYear ?? 0,
                 match_count: data.matchCount ?? 0,
                 indices: data.indices || [],
             };

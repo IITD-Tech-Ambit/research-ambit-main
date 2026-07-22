@@ -322,6 +322,7 @@ def build_atlas_tiles(atlas_path=DEFAULT_ATLAS, capacity=DEFAULT_CAPACITY, mongo
                     "title": p.get("title", ""), "theme": p.get("theme", ""),
                     "domain": p.get("domain", ""), "subdomain": p.get("subdomain", ""),
                     "topic": p.get("topic", ""), "department": p.get("department", ""),
+                    "year": int(p.get("year")) if p.get("year") else None,
                     "citations": int(p.get("citations", 0) or 0),
                     "x": p["x"], "y": p["y"], "z": p["z"],
                 }},
@@ -334,6 +335,10 @@ def build_atlas_tiles(atlas_path=DEFAULT_ATLAS, capacity=DEFAULT_CAPACITY, mongo
     if point_ops:
         db.atlas_points.bulk_write(point_ops, ordered=False)
     try:
+        db.atlas_points.create_index(
+            [("version", 1), ("year", 1)],
+            name="atlas_point_version_year",
+        )
         db.atlas_points.create_index(
             [("title", "text"), ("theme", "text"), ("domain", "text"),
              ("subdomain", "text"), ("topic", "text")],

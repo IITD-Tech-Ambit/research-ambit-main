@@ -66,3 +66,7 @@ __pycache__/
 
 # Atlas / KG generated JSON (rebuild via knowledge-graph/pipeline/build_kg.py)
 data/knowledge-graph/
+
+# One-time schools/centres migration input (not read at runtime).
+# Keep department-sheet-roster.json tracked — directory Departments tab uses it.
+data/schools-centres-pdf.json
