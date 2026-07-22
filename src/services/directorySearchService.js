@@ -5,7 +5,7 @@ import {
     escapeRegex,
     departmentLookupStage
 } from "../domain/facultyDirectory.js";
-import { SEARCH_CACHE_TTL_S, cachedPayload } from "./directoryCache.js";
+import { SEARCH_CACHE_TTL_S, cachedPayload, dirCacheKey } from "./directoryCache.js";
 import * as repo from "./directoryRepository.js";
 
 const SEARCH_PROJECT = {
@@ -53,7 +53,7 @@ export const searchFaculties = async ({ q, limit } = {}) => {
         };
     }
 
-    const cacheKey = `dir:search:${tokens.join(" ")}:${l}`;
+    const cacheKey = dirCacheKey("search", tokens.join(" "), l);
 
     return cachedPayload(cacheKey, SEARCH_CACHE_TTL_S, async () => {
         const tokenMatchConditions = tokens.map((token) => ({
