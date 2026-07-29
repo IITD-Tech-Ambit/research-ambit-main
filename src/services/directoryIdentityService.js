@@ -6,7 +6,7 @@ import {
     formatDirectoryFaculty,
     collectKerberosInfo
 } from "../domain/facultyDirectory.js";
-import { CACHE_TTL_S, cachedPayload, batchCacheKey } from "./directoryCache.js";
+import { CACHE_TTL_S, cachedPayload, batchCacheKey, dirCacheKey } from "./directoryCache.js";
 import * as repo from "./directoryRepository.js";
 
 async function formatWithDepartments(faculties) {
@@ -163,7 +163,7 @@ export const getFacultyByKerberos = async ({ kerberos } = {}) => {
         throw new BadRequestError("Kerberos id is required");
     }
     const k = kerberos.trim().toLowerCase();
-    const cacheKey = `dir:faculty:kerberos:${k}`;
+    const cacheKey = dirCacheKey("faculty", "kerberos", k);
 
     return cachedPayload(cacheKey, CACHE_TTL_S, async () => {
         const faculty = await repo.resolveFacultyByKerberos(k);

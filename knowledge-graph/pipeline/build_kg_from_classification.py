@@ -92,7 +92,7 @@ def _resolve_uri(cli_uri: str | None) -> str:
 
 
 # ---------------------------------------------------------------------------
-# 3D layout (theme cluster on a sphere + per-domain and per-paper jitter)
+# 3D layout (theme cluster on a sphere + cohesive per-theme cloud)
 # ---------------------------------------------------------------------------
 def _fibonacci_sphere(i: int, n: int, radius: float = 1.0) -> tuple[float, float, float]:
     if n <= 1:
@@ -109,28 +109,88 @@ def _seed_rng(key: str) -> random.Random:
     return random.Random(int(digest[:8], 16))
 
 
-def _paper_position(theme, domain, paper_id, theme_index, theme_count):
-    ti = theme_index.get(theme, 0)
-    cx, cy, cz = _fibonacci_sphere(ti, theme_count, 0.62)
+def _sphere_cloud_offset(rng: random.Random, radius: float, density_power: float = 0.65) -> tuple[float, float, float]:
+    """Spherical cloud: equal in all directions, open fill (fewer gaps / hot cores)."""
+    u = rng.random()
+    v = rng.random()
+    w = rng.random()
+    r = radius * (u ** density_power)
+    theta = 2.0 * math.pi * v
+    cos_phi = 2.0 * w - 1.0
+    sin_phi = math.sqrt(max(0.0, 1.0 - cos_phi * cos_phi))
+    return (
+        r * math.cos(theta) * sin_phi,
+        r * math.sin(theta) * sin_phi,
+        r * cos_phi,
+    )
 
-    # Domain sub-blob offset (bigger range now that sub-domain/topic layers are gone).
-    dom_rng = _seed_rng(f"dom:{domain}")
-    dx = (dom_rng.random() - 0.5) * 0.34
-    dy = (dom_rng.random() - 0.5) * 0.34
-    dz = (dom_rng.random() - 0.5) * 0.34
 
+def _theme_blob_radius(count: int, max_count: int) -> float:
+    """Larger spherical spread for every theme (fluffier nebulas)."""
+    max_count = max(1, max_count)
+    # ~0.90–1.40 — clearly more open than the packed full-atlas look.
+    return 0.90 + 0.50 * math.sqrt(count / max_count)
+
+
+def _theme_centers(themes, theme_radii):
+    """Place theme centres far enough apart that large spheres stay distinct."""
+    n = len(themes)
+    if n == 0:
+        return {}
+    if n == 1:
+        t = themes[0]
+        return {t: (0.0, 0.0, 0.0)}
+
+    max_blob = max(theme_radii.values()) if theme_radii else 1.1
+    gap = 0.55
+    spread = max(3.6, (2 * max_blob + gap) * 1.95)
+
+    nodes = []
+    for k, theme in enumerate(themes):
+        dx, dy, dz = _fibonacci_sphere(k, n, spread)
+        nodes.append({
+            "theme": theme,
+            "blobR": theme_radii.get(theme, 1.1),
+            "x": dx, "y": dy, "z": dz,
+        })
+
+    # Soft collision — push centres apart until blobs + gap do not overlap.
+    for _ in range(160):
+        moved = False
+        for i in range(n):
+            for j in range(i + 1, n):
+                a, b = nodes[i], nodes[j]
+                dx = b["x"] - a["x"]
+                dy = b["y"] - a["y"]
+                dz = b["z"] - a["z"]
+                d = math.sqrt(dx * dx + dy * dy + dz * dz)
+                if d < 1e-9:
+                    fx, fy, fz = _fibonacci_sphere(j, n, 1.0)
+                    dx, dy, dz, d = fx, fy, fz, 1.0
+                min_d = a["blobR"] + b["blobR"] + gap
+                if d < min_d:
+                    push = (min_d - d) / (2.0 * d)
+                    a["x"] -= dx * push; a["y"] -= dy * push; a["z"] -= dz * push
+                    b["x"] += dx * push; b["y"] += dy * push; b["z"] += dz * push
+                    moved = True
+        if not moved:
+            break
+
+    mx = sum(node["x"] for node in nodes) / n
+    my = sum(node["y"] for node in nodes) / n
+    mz = sum(node["z"] for node in nodes) / n
+    return {
+        node["theme"]: (node["x"] - mx, node["y"] - my, node["z"] - mz)
+        for node in nodes
+    }
+
+
+def _paper_position(theme, paper_id, centers, blob_radius):
+    """Spherical theme cloud with more point spread (filter-style recipe)."""
+    cx, cy, cz = centers.get(theme, (0.0, 0.0, 0.0))
     id_rng = _seed_rng(f"id:{paper_id}")
-    px = (id_rng.random() - 0.5) * 0.16
-    py = (id_rng.random() - 0.5) * 0.16
-    pz = (id_rng.random() - 0.5) * 0.16
-
-    x, y, z = cx + dx + px, cy + dy + py, cz + dz + pz
-    dist = math.sqrt(x * x + y * y + z * z) or 1.0
-    pull = 0.72 + id_rng.random() * 0.38
-    x *= pull / dist
-    y *= pull / dist
-    z *= pull / dist
-    return round(x, 5), round(y, 5), round(z, 5)
+    px, py, pz = _sphere_cloud_offset(id_rng, blob_radius, density_power=0.65)
+    return round(cx + px, 5), round(cy + py, 5), round(cz + pz, 5)
 
 
 # ---------------------------------------------------------------------------
@@ -261,11 +321,20 @@ def load_papers(db, themes, domains, departments, include_unclassified, require_
 # ---------------------------------------------------------------------------
 def build_atlas(papers):
     themes = sorted({p["theme"] for p in papers if p["theme"]})
-    theme_index = {t: i for i, t in enumerate(themes)}
+    theme_counts = defaultdict(int)
+    for p in papers:
+        if p["theme"]:
+            theme_counts[p["theme"]] += 1
+    max_count = max(theme_counts.values()) if theme_counts else 1
+    theme_radii = {
+        t: _theme_blob_radius(theme_counts[t], max_count) for t in themes
+    }
+    centers = _theme_centers(themes, theme_radii)
 
     items = []
     for idx, paper in enumerate(sorted(papers, key=lambda p: p["id"])):
-        x, y, z = _paper_position(paper["theme"], paper["domain"], paper["id"], theme_index, len(themes))
+        blob_r = theme_radii.get(paper["theme"], 0.28)
+        x, y, z = _paper_position(paper["theme"], paper["id"], centers, blob_r)
         items.append(
             {
                 "i": idx,

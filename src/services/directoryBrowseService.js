@@ -15,7 +15,7 @@ import {
     getDepartmentRosterIds,
     buildDepartmentRosterMatchStage
 } from "../domain/departmentSheetRoster.js";
-import { CACHE_TTL_S, cachedPayload } from "./directoryCache.js";
+import { CACHE_TTL_S, cachedPayload, dirCacheKey } from "./directoryCache.js";
 import * as repo from "./directoryRepository.js";
 
 export const listFaculty = async ({ page, limit, sortBy, order } = {}) => {
@@ -24,7 +24,7 @@ export const listFaculty = async ({ page, limit, sortBy, order } = {}) => {
     const by = sortBy || "h_index";
     const ord = order === "asc" ? "asc" : "desc";
 
-    const cacheKey = `dir:list:${p}:${l}:${by}:${ord}`;
+    const cacheKey = dirCacheKey("list", p, l, by, ord);
 
     return cachedPayload(cacheKey, CACHE_TTL_S, async () => {
         const skip = (p - 1) * l;
@@ -81,7 +81,7 @@ export const listFaculty = async ({ page, limit, sortBy, order } = {}) => {
 export const getFacultiesGroupedByDepartment = async ({ category, summaryOnly } = {}) => {
     const cat = String(category ?? "all").trim().toLowerCase() || "all";
     const summary = summaryOnly === true || summaryOnly === "true";
-    const cacheKey = `dir:grouped:${summary ? "summary" : "full"}:${cat}`;
+    const cacheKey = dirCacheKey("grouped", summary ? "summary" : "full", cat);
 
     return cachedPayload(cacheKey, CACHE_TTL_S, async () => {
         if (summary) {
@@ -240,7 +240,7 @@ export const getFacultiesForDepartmentGroup = async ({ departmentId, category } 
         throw new BadRequestError("Valid department id is required");
     }
 
-    const cacheKey = `dir:grouped:dept:${cat}:${departmentId}`;
+    const cacheKey = dirCacheKey("grouped", "dept", cat, departmentId);
 
     return cachedPayload(cacheKey, CACHE_TTL_S, async () => {
         const departmentObjectId = repo.toObjectId(departmentId);
