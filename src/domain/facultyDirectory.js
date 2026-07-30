@@ -127,6 +127,7 @@ export const buildSubjectAreaMap = async (kerberosIds = [], expertIdToKerberos =
 
 export const mergeResearchAreas = (facultyDoc, subjectMap) => {
     const buckets = [
+        (facultyDoc.dominant_domains || []).map((d) => d?.name).filter(Boolean),
         facultyDoc.expertise,
         facultyDoc.brief_expertise,
         facultyDoc.subjects,
@@ -313,6 +314,7 @@ export const facultyCardProjectFields = {
     brief_expertise: 1,
     subjects: 1,
     wos_subjects: 1,
+    dominant_domains: 1,
     profile_image_url: 1,
     designation: 1,
     "department._id": 1,
@@ -332,6 +334,7 @@ export const facultyCardPushFields = {
     brief_expertise: "$brief_expertise",
     subjects: "$subjects",
     wos_subjects: "$wos_subjects",
+    dominant_domains: "$dominant_domains",
     profile_image_url: "$profile_image_url",
     designation: "$designation"
 };

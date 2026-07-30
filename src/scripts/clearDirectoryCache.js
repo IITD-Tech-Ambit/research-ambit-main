@@ -7,10 +7,11 @@ await client.connect();
 
 let deleted = 0;
 for (const pattern of ["dir:v2:*", "dir:*"]) {
-    for await (const key of client.scanIterator({ MATCH: pattern, COUNT: 200 })) {
-        if (!key) continue;
-        await client.del(key);
-        deleted += 1;
+    // redis@5's scanIterator yields batches (arrays) of keys, not one key at a time.
+    for await (const keys of client.scanIterator({ MATCH: pattern, COUNT: 200 })) {
+        if (!keys || keys.length === 0) continue;
+        await client.del(keys);
+        deleted += keys.length;
     }
 }
 console.log(`Deleted ${deleted} directory cache keys (dir:v2:* + legacy dir:*)`);
