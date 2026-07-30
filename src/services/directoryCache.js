@@ -8,10 +8,10 @@ export const CACHE_TTL_S = parseInt(process.env.FACULTY_CACHE_TTL_S) || 10800;
 // TTL would let Redis accumulate a huge number of rarely-reused keys.
 export const SEARCH_CACHE_TTL_S = 300;
 
-// Bumped from `dir:` → `dir:v2:` so this process's responses are not overwritten
-// by an older backend that still shares the same Redis (local + prod both point
-// at 10.17.8.24). Old keys remain until TTL; clearDirectoryCache deletes both.
-export const DIR_CACHE_PREFIX = "dir:v2";
+// Bumped to `dir:v3:` after dropping department-sheet-roster filtering so
+// cached roster-filtered counts are not served. clearDirectoryCache deletes
+// current + legacy prefixes.
+export const DIR_CACHE_PREFIX = "dir:v3";
 
 export const dirCacheKey = (...parts) => `${DIR_CACHE_PREFIX}:${parts.join(":")}`;
 
