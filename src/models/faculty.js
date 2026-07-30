@@ -72,6 +72,21 @@ const facultySchema = new mongoose.Schema({
     expertise:[String],
     brief_expertise:[String],
     subjects:[String],
+
+    // Precomputed dominant taxonomy Domains for this faculty, written once by
+    // SEO-Backend-iitd's scripts/taxonomy/populateFacultyDomains.js against
+    // this same collection. Declared here too so this schema (a separate
+    // Mongoose model over the same `faculties` collection) actually returns
+    // the field on read.
+    dominant_domains: [{
+        domain_id: { type: mongoose.Schema.Types.ObjectId },
+        name: String,
+        slug: String,
+        paper_count: Number,
+        _id: false
+    }],
+    dominant_domains_updated_at: { type: Date },
+
     orcid_id:[String],
     researcher_id:[String],
     google_scholar_id:[String],
