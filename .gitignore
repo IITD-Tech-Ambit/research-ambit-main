@@ -68,5 +68,5 @@ __pycache__/
 data/knowledge-graph/
 
 # One-time schools/centres migration input (not read at runtime).
-# Keep department-sheet-roster.json tracked — directory Departments tab uses it.
+# department-sheet-roster.json is unused at runtime (kept for reference only).
 data/schools-centres-pdf.json

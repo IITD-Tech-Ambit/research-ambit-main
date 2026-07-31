@@ -11,10 +11,6 @@ import {
     buildGroupedCategoryMatch,
     facultyUnitsExpandStages
 } from "../domain/facultyDirectory.js";
-import {
-    getDepartmentRosterIds,
-    buildDepartmentRosterMatchStage
-} from "../domain/departmentSheetRoster.js";
 import { CACHE_TTL_S, cachedPayload, dirCacheKey } from "./directoryCache.js";
 import * as repo from "./directoryRepository.js";
 
@@ -117,16 +113,6 @@ export const getFacultiesGroupedByDepartment = async ({ category, summaryOnly } 
                 }
             }
 
-            // The Departments tab shows only sheet-verified faculty (see
-            // departmentSheetRoster.js), so its counts must match that roster.
-            // The "All" tab keeps full DB counts.
-            if (cat === "departments") {
-                for (const group of merged.values()) {
-                    const rosterIds = getDepartmentRosterIds(group._id);
-                    if (rosterIds) group.stats.totalFaculty = rosterIds.length;
-                }
-            }
-
             const departments = [...merged.values()].sort((a, b) =>
                 a.department.name.localeCompare(b.department.name)
             );
@@ -184,11 +170,6 @@ export const getFacultiesGroupedByDepartment = async ({ category, summaryOnly } 
             // department row when browsing schools/centres).
             ...(categoryDbValue
                 ? [{ $match: { "department.category": categoryDbValue } }]
-                : []),
-            // Departments tab lists only sheet-verified faculty per unit;
-            // everyone else in the DB remains visible on the "All" tab.
-            ...(cat === "departments" && buildDepartmentRosterMatchStage()
-                ? [buildDepartmentRosterMatchStage()]
                 : []),
             { $sort: { "department.name": 1, h_index: -1 } },
             {
@@ -265,12 +246,7 @@ export const getFacultiesForDepartmentGroup = async ({ departmentId, category } 
         ];
         if (department.code) departmentMatchClauses.push({ department: department.code });
 
-        // When browsing the Departments tab, restrict a department's page to
-        // its sheet-verified roster; "all" and other categories are unfiltered.
-        const rosterIds = cat === "departments" ? getDepartmentRosterIds(departmentObjectId) : null;
-        const facultyMatch = rosterIds
-            ? { $and: [{ $or: departmentMatchClauses }, { _id: { $in: rosterIds } }] }
-            : { $or: departmentMatchClauses };
+        const facultyMatch = { $or: departmentMatchClauses };
 
         const facultiesRaw = await repo.aggregateFaculties([
             { $match: facultyMatch },

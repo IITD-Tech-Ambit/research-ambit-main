@@ -157,12 +157,23 @@ export const formatDirectoryFaculty = (facultyDoc, subjectMap, overrides = {}) =
     const nameParts = [facultyDoc.title, facultyDoc.firstName, facultyDoc.lastName].filter(Boolean);
     const name = nameParts.join(" ").replace(/\s+/g, " ").trim();
 
+    // Per-metric visibility: a metric the faculty hid is redacted to null here so
+    // the value never leaves the server (profile, search AND listing all format
+    // through this function). Missing key => visible.
+    const vis = facultyDoc.metric_visibility || {};
+    const metricVisibility = {
+        h_index: vis.h_index !== false,
+        citations: vis.citations !== false,
+        papers: vis.papers !== false,
+        patents: vis.patents !== false,
+    };
+
     return {
         _id: facultyDoc._id,
         name,
         email: facultyDoc.email || "",
-        citationCount: facultyDoc.citation_count ?? 0,
-        hIndex: facultyDoc.h_index ?? 0,
+        citationCount: metricVisibility.citations ? (facultyDoc.citation_count ?? 0) : null,
+        hIndex: metricVisibility.h_index ? (facultyDoc.h_index ?? 0) : null,
         research_areas: mergeResearchAreas(facultyDoc, subjectMap),
         orcId: pickPrimaryIdentifier(facultyDoc.orcid_id),
         scopusId: pickPrimaryIdentifier(facultyDoc.scopus_id),
@@ -171,7 +182,10 @@ export const formatDirectoryFaculty = (facultyDoc, subjectMap, overrides = {}) =
         tags: deriveDepartmentTags(department),
         profileImageUrl: facultyDoc.profile_image_url || null,
         designation: facultyDoc.designation || null,
-        workingFromYear: typeof facultyDoc.working_from_year === "number" ? facultyDoc.working_from_year : null
+        workingFromYear: typeof facultyDoc.working_from_year === "number" ? facultyDoc.working_from_year : null,
+        // Flags for the frontend: owner toggles + hiding the computed papers/patents
+        // counts that aren't part of this payload.
+        metricVisibility,
     };
 };
 
@@ -316,6 +330,7 @@ export const facultyCardProjectFields = {
     wos_subjects: 1,
     dominant_domains: 1,
     profile_image_url: 1,
+    metric_visibility: 1,
     designation: 1,
     "department._id": 1,
     "department.name": 1,
@@ -336,6 +351,7 @@ export const facultyCardPushFields = {
     wos_subjects: "$wos_subjects",
     dominant_domains: "$dominant_domains",
     profile_image_url: "$profile_image_url",
+    metric_visibility: "$metric_visibility",
     designation: "$designation"
 };
 
