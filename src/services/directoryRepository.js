@@ -14,6 +14,34 @@ export function resolveFacultyByKerberos(kerberos) {
     return Faculty.findOne({ email: new RegExp("^" + escaped + "@", "i") }).lean();
 }
 
+/** Set a faculty member's profile image URL (matched by kerberos = email prefix).
+ * Returns the updated doc, or null if no faculty matched. */
+export function updateFacultyImageByKerberos(kerberos, url) {
+    const escaped = escapeRegex(kerberos);
+    return Faculty.findOneAndUpdate(
+        { email: new RegExp("^" + escaped + "@", "i") },
+        { $set: { profile_image_url: url } },
+        { new: true },
+    ).lean();
+}
+
+/** Set which of a faculty member's metrics are visible. `visibility` is a subset
+ * of { h_index, citations, papers, patents } -> boolean. Values are never
+ * deleted, only toggled. Returns the updated doc, or null if no faculty matched. */
+export function updateFacultyVisibilityByKerberos(kerberos, visibility) {
+    const escaped = escapeRegex(kerberos);
+    const set = {};
+    for (const key of ["h_index", "citations", "papers", "patents"]) {
+        if (typeof visibility[key] === "boolean") set[`metric_visibility.${key}`] = visibility[key];
+    }
+    if (Object.keys(set).length === 0) return Promise.resolve(null);
+    return Faculty.findOneAndUpdate(
+        { email: new RegExp("^" + escaped + "@", "i") },
+        { $set: set },
+        { new: true },
+    ).lean();
+}
+
 export function findFacultyById(id) {
     return Faculty.findById(id).lean();
 }

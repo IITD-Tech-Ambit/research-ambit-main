@@ -50,6 +50,16 @@ const facultySchema = new mongoose.Schema({
     profile_image_url:{
         type:String,
     },
+    // Per-metric visibility, controlled by the faculty member. When false, the
+    // metric is hidden from ALL public views (profile, directory, chatbot) but
+    // the underlying value stays in the DB so it can be shown again later.
+    // A missing field / missing key means visible (default true).
+    metric_visibility:{
+        h_index:{ type:Boolean, default:true },
+        citations:{ type:Boolean, default:true },
+        papers:{ type:Boolean, default:true },
+        patents:{ type:Boolean, default:true },
+    },
     designation:{
         type:String,
     },
