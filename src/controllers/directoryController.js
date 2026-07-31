@@ -2,7 +2,7 @@ import fs from "fs";
 import { asyncErrorHandler } from "../middleware/errorHandler.js";
 import { successResponse } from "../lib/responseUtils.js";
 import * as directoryService from "../services/directoryService.js";
-import { updateFacultyImageByKerberos, updateFacultyVisibilityByKerberos } from "../services/directoryRepository.js";
+import { updateFacultyImageByKerberos, updateFacultyVisibilityByKerberos, updateFacultyProfileExtrasByKerberos, resolveFacultyByKerberos } from "../services/directoryRepository.js";
 import { uploadToCloudinary } from "../lib/cloudinary.js";
 import { cacheDelByPrefix } from "../lib/cache.js";
 import { DIR_CACHE_PREFIX } from "../services/directoryCache.js";
@@ -166,6 +166,94 @@ directory.updateFacultyVisibility = asyncErrorHandler(async (req, res) => {
             patents: v.patents !== false,
         },
     }, "Visibility updated.", 200);
+});
+
+const BACKGROUND_MIN_CHARS = 100;
+
+// Faculty self-service: read one's OWN Background / Qualifications sections for
+// editing. Owner-only. Unlike the public profile read, this returns the full
+// content even when a section is hidden, so the owner can edit hidden text in
+// edit mode. The public /faculty/:kerberos/profile read redacts hidden content.
+directory.getFacultyProfileExtras = asyncErrorHandler(async (req, res) => {
+    const kerberos = String(req.params.kerberos || "").toLowerCase();
+    const authKerberos = String(req.headers["x-user-kerberos"] || "").toLowerCase();
+
+    if (!authKerberos) {
+        return res.status(401).json({ success: false, message: "Not authenticated." });
+    }
+    if (authKerberos !== kerberos) {
+        return res.status(403).json({ success: false, message: "You can only edit your own profile." });
+    }
+
+    const faculty = await resolveFacultyByKerberos(kerberos);
+    if (!faculty) {
+        return res.status(404).json({ success: false, message: `No faculty found for "${kerberos}".` });
+    }
+
+    return successResponse(res, {
+        background: faculty.background || "",
+        qualifications: Array.isArray(faculty.qualifications) ? faculty.qualifications : [],
+        backgroundVisible: faculty.background_visible === true,
+        qualificationsVisible: faculty.qualifications_visible === true,
+    }, "Profile extras fetched.", 200);
+});
+
+// Faculty self-service: save one's OWN Background / Qualifications sections and
+// their visibility. Owner-only. Content is stored even when a section is hidden
+// (kept in the DB so it can be shown again). Validation is enforced ONLY when a
+// section is being shown: background >= 100 chars, qualifications >= 1 item.
+// Flushes the directory cache so the change shows on the profile at once.
+directory.updateFacultyProfileExtras = asyncErrorHandler(async (req, res) => {
+    const kerberos = String(req.params.kerberos || "").toLowerCase();
+    const authKerberos = String(req.headers["x-user-kerberos"] || "").toLowerCase();
+
+    if (!authKerberos) {
+        return res.status(401).json({ success: false, message: "Not authenticated." });
+    }
+    if (authKerberos !== kerberos) {
+        return res.status(403).json({ success: false, message: "You can only edit your own profile." });
+    }
+
+    const body = req.body || {};
+    const background = typeof body.background === "string" ? body.background : "";
+    const qualifications = Array.isArray(body.qualifications)
+        ? body.qualifications.map((q) => String(q).trim()).filter(Boolean)
+        : [];
+    const backgroundVisible = body.background_visible === true;
+    const qualificationsVisible = body.qualifications_visible === true;
+
+    // Enforce minimums only when the section is shown; hidden content is stored as-is.
+    if (backgroundVisible && background.trim().length < BACKGROUND_MIN_CHARS) {
+        return res.status(400).json({
+            success: false,
+            message: `Background must be at least ${BACKGROUND_MIN_CHARS} characters to show it.`,
+        });
+    }
+    if (qualificationsVisible && qualifications.length === 0) {
+        return res.status(400).json({
+            success: false,
+            message: "Add at least one qualification to show this section.",
+        });
+    }
+
+    const updated = await updateFacultyProfileExtrasByKerberos(kerberos, {
+        background,
+        qualifications,
+        background_visible: backgroundVisible,
+        qualifications_visible: qualificationsVisible,
+    });
+    if (!updated) {
+        return res.status(404).json({ success: false, message: `No faculty found for "${kerberos}".` });
+    }
+
+    await cacheDelByPrefix(DIR_CACHE_PREFIX);
+
+    return successResponse(res, {
+        background: updated.background || "",
+        qualifications: Array.isArray(updated.qualifications) ? updated.qualifications : [],
+        backgroundVisible: updated.background_visible === true,
+        qualificationsVisible: updated.qualifications_visible === true,
+    }, "Profile updated.", 200);
 });
 
 export default directory;

@@ -176,6 +176,19 @@ export const getFacultyByKerberos = async ({ kerberos } = {}) => {
         const subjectMap = await buildSubjectAreaMap(fkKids, fkE2k, fkS2k);
         const facultyResponse = formatDirectoryFaculty(faculty, subjectMap, { department });
 
+        // Profile-only sections (Background / Qualifications). Added here — NOT in
+        // the shared formatDirectoryFaculty — so they never leak into directory
+        // search/listings. Content is exposed only when the faculty has toggled the
+        // section on; the value stays in the DB regardless. The owner's edit view
+        // loads the full (incl. hidden) content via the authenticated profile-extras
+        // endpoint, not this public read.
+        const backgroundVisible = faculty.background_visible === true;
+        const qualificationsVisible = faculty.qualifications_visible === true;
+        facultyResponse.backgroundVisible = backgroundVisible;
+        facultyResponse.qualificationsVisible = qualificationsVisible;
+        facultyResponse.background = backgroundVisible ? (faculty.background || "") : null;
+        facultyResponse.qualifications = qualificationsVisible ? (faculty.qualifications || []) : null;
+
         return { message: "Faculty fetched successfully", data: facultyResponse };
     });
 };
