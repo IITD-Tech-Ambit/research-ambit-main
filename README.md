@@ -67,6 +67,35 @@ Old builds are garbage-collected automatically (keeps the current + previous ver
 - **Observability:** Prometheus metrics per PM2 worker (`METRICS_PORT_BASE`, default 9111+)
 - **Deployment:** Docker + PM2 cluster (`Dockerfile`, `ecosystem.config.cjs`); nginx routes `/api/` to port 3002 in the full stack
 
+## Faculty self-service (Directory profile)
+
+Logged-in faculty can edit **their own** Directory profile. All routes are
+owner-enforced: the gateway verifies the `ra_session` and injects a trusted
+`x-user-kerberos`, and the controller requires it to equal the path `:kerberos`.
+
+| Route | Purpose |
+|---|---|
+| `POST /api/directory/faculty/:kerberos/image` | Replace the profile photo (multipart, ≤5 MB, image only). Uploads to Cloudinary (`faculty_images`), sets `profile_image_url`. |
+| `PATCH /api/directory/faculty/:kerberos/visibility` | Show/hide the four metrics — `h_index`, `citations`, `papers`, `patents`. JSON body of booleans. |
+
+**Metric visibility.** Each faculty doc carries `metric_visibility` (all default
+`true`). A hidden metric is **redacted to `null`** in the central
+`formatDirectoryFaculty` (so profile, search *and* listings hide it) and in the
+research-summary path — the value is **never deleted**, only flagged, so it can be
+shown again. The flags are exposed as `metricVisibility` for the frontend's edit
+toggles. Every write **flushes the directory cache** (`cacheDelByPrefix`) so the
+change takes effect everywhere immediately.
+
+> ⚠️ **Gateway routing (do not revert):** `/api/directory` is served over
+> **directory.v1 gRPC** through Envoy, whose proto has **no `metricVisibility`
+> field** and turns a redacted `null` metric into `0`. So the metric-bearing
+> directory **reads** (`profile`, `research-summary`, `search`, flat list,
+> `grouped/:id/faculties`) are deliberately **HTTP-proxied** in
+> `api-gateway/src/routes/proxy.js` — the response envelope is identical, but this
+> is what lets the visibility flags + `null` redaction reach the browser. Routing
+> these back through gRPC will silently break metric hiding. Any *new* profile
+> field faces the same constraint.
+
 ## Prerequisites
 
 - [Node.js](https://nodejs.org/) 20+

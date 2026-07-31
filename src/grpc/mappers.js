@@ -25,6 +25,15 @@ export function mapDepartment(dept) {
     return out;
 }
 
+/** formatDominantDomains output element -> DominantDomain. */
+export function mapDominantDomain(d) {
+    return {
+        name: d.name || "",
+        slug: d.slug || "",
+        paper_count: d.paperCount ?? 0,
+    };
+}
+
 /** formatDirectoryFacultyCards element -> FacultyCard. */
 export function mapFacultyCard(card) {
     const out = {
@@ -34,6 +43,7 @@ export function mapFacultyCard(card) {
         citation_count: card.citationCount ?? 0,
         h_index: card.hIndex ?? 0,
         research_areas: Array.isArray(card.research_areas) ? card.research_areas : [],
+        dominant_domains: Array.isArray(card.dominant_domains) ? card.dominant_domains.map(mapDominantDomain) : [],
     };
     const dept = mapDepartment(card.department);
     if (dept) out.department = dept;
@@ -53,6 +63,7 @@ export function mapFaculty(f) {
         h_index: f.hIndex ?? 0,
         research_areas: Array.isArray(f.research_areas) ? f.research_areas : [],
         tags: Array.isArray(f.tags) ? f.tags : [],
+        dominant_domains: Array.isArray(f.dominant_domains) ? f.dominant_domains.map(mapDominantDomain) : [],
     };
     setOpt(out, "orc_id", f.orcId);
     setOpt(out, "scopus_id", f.scopusId);

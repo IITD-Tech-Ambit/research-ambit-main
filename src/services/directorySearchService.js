@@ -17,6 +17,7 @@ const SEARCH_PROJECT = {
     email: 1,
     h_index: 1,
     citation_count: 1,
+    metric_visibility: 1,
     expertise: 1,
     brief_expertise: 1,
     subjects: 1,

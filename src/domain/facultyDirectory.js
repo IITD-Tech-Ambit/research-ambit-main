@@ -151,6 +151,17 @@ export const mergeResearchAreas = (facultyDoc, subjectMap) => {
     return ordered.slice(0, MAX_RESEARCH_AREAS);
 };
 
+/**
+ * Faculty's precomputed dominant taxonomy Domains (Faculty.dominant_domains), formatted for
+ * direct display/linking — unlike research_areas (which pads with expertise/subjects/etc. to
+ * MAX_RESEARCH_AREAS), this is exactly the domain set the faculty page's Research Areas
+ * section renders, each one clickable through to its /research-areas?domain=<slug> page.
+ */
+export const formatDominantDomains = (facultyDoc) =>
+    (facultyDoc?.dominant_domains || [])
+        .filter((d) => d?.name && d?.slug)
+        .map((d) => ({ name: d.name, slug: d.slug, paperCount: d.paper_count ?? 0 }));
+
 export const formatDirectoryFaculty = (facultyDoc, subjectMap, overrides = {}) => {
     if (!facultyDoc) return null;
     const department = overrides.department || facultyDoc.department || null;
@@ -175,6 +186,7 @@ export const formatDirectoryFaculty = (facultyDoc, subjectMap, overrides = {}) =
         citationCount: metricVisibility.citations ? (facultyDoc.citation_count ?? 0) : null,
         hIndex: metricVisibility.h_index ? (facultyDoc.h_index ?? 0) : null,
         research_areas: mergeResearchAreas(facultyDoc, subjectMap),
+        dominant_domains: formatDominantDomains(facultyDoc),
         orcId: pickPrimaryIdentifier(facultyDoc.orcid_id),
         scopusId: pickPrimaryIdentifier(facultyDoc.scopus_id),
         googleScholarId: pickPrimaryIdentifier(facultyDoc.google_scholar_id),
@@ -369,6 +381,7 @@ export const formatDirectoryFacultyCards = (facultyDocs = [], departmentOverride
             citationCount: formatted.citationCount,
             hIndex: formatted.hIndex,
             research_areas: formatted.research_areas,
+            dominant_domains: formatted.dominant_domains,
             department: formatted.department,
             profileImageUrl: formatted.profileImageUrl,
             designation: formatted.designation
