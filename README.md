@@ -77,6 +77,21 @@ owner-enforced: the gateway verifies the `ra_session` and injects a trusted
 |---|---|
 | `POST /api/directory/faculty/:kerberos/image` | Replace the profile photo (multipart, ≤5 MB, image only). Uploads to Cloudinary (`faculty_images`), sets `profile_image_url`. |
 | `PATCH /api/directory/faculty/:kerberos/visibility` | Show/hide the four metrics — `h_index`, `citations`, `papers`, `patents`. JSON body of booleans. |
+| `GET /api/directory/faculty/:kerberos/profile-extras` | Owner-only. Returns the **full** Background / Qualifications (incl. hidden content) for the edit view. |
+| `PATCH /api/directory/faculty/:kerberos/profile-extras` | Save Background / Qualifications + their visibility. Body: `{ background, qualifications[], background_visible, qualifications_visible }`. |
+
+**Background & Qualifications.** Two optional, **profile-only** sections
+(`background` string, `qualifications` string[]) with per-section visibility
+(`background_visible` / `qualifications_visible`, both default **`false`** →
+hidden). Unlike metrics, these are added **only in the profile response**
+(`getFacultyByKerberos`), *not* in `formatDirectoryFaculty`, so they never leak
+into search/listings. Content is **kept in the DB even when hidden** (so it can be
+shown again) and is **redacted to `null`** on the public profile read when hidden;
+the owner's edit view loads the full content through the authenticated
+`GET …/profile-extras` instead. Validation is enforced **only when a section is
+shown**: background ≥ 100 characters, ≥ 1 qualification. Writes flush the directory
+cache. Exposed to the frontend as `backgroundVisible` / `qualificationsVisible`
+(+ `background` / `qualifications`, `null` when hidden).
 
 **Metric visibility.** Each faculty doc carries `metric_visibility` (all default
 `true`). A hidden metric is **redacted to `null`** in the central

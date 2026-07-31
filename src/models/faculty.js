@@ -60,6 +60,26 @@ const facultySchema = new mongoose.Schema({
         papers:{ type:Boolean, default:true },
         patents:{ type:Boolean, default:true },
     },
+    // Optional profile-only sections the faculty can add and choose to show.
+    // Hidden by default; the content is kept in the DB even when hidden so it can
+    // be shown again. Only exposed on the /faculty/:kerberos/profile page —
+    // never in directory search/listings. Validation (>=100 chars background,
+    // >=1 qualification) is enforced on the write ONLY when the section is shown.
+    background:{
+        type:String,
+    },
+    qualifications:{
+        type:[String],
+        default:[],
+    },
+    background_visible:{
+        type:Boolean,
+        default:false,
+    },
+    qualifications_visible:{
+        type:Boolean,
+        default:false,
+    },
     designation:{
         type:String,
     },

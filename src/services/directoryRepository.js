@@ -42,6 +42,26 @@ export function updateFacultyVisibilityByKerberos(kerberos, visibility) {
     ).lean();
 }
 
+/** Set a faculty member's profile-only Background / Qualifications sections and
+ * their visibility flags. `fields` is a subset of
+ * { background, qualifications, background_visible, qualifications_visible }.
+ * Content is written even when the corresponding section is hidden (kept in the
+ * DB so it can be shown again). Returns the updated doc, or null if none matched. */
+export function updateFacultyProfileExtrasByKerberos(kerberos, fields) {
+    const escaped = escapeRegex(kerberos);
+    const set = {};
+    if (typeof fields.background === "string") set.background = fields.background;
+    if (Array.isArray(fields.qualifications)) set.qualifications = fields.qualifications;
+    if (typeof fields.background_visible === "boolean") set.background_visible = fields.background_visible;
+    if (typeof fields.qualifications_visible === "boolean") set.qualifications_visible = fields.qualifications_visible;
+    if (Object.keys(set).length === 0) return Promise.resolve(null);
+    return Faculty.findOneAndUpdate(
+        { email: new RegExp("^" + escaped + "@", "i") },
+        { $set: set },
+        { new: true },
+    ).lean();
+}
+
 export function findFacultyById(id) {
     return Faculty.findById(id).lean();
 }

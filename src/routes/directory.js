@@ -25,6 +25,10 @@ router.get("/faculty/:kerberos/publications", directory.getFacultyPublications);
 // the owner check in the controller).
 router.post("/faculty/:kerberos/image", uploadImage.single("image"), directory.updateFacultyImage);
 router.patch("/faculty/:kerberos/visibility", directory.updateFacultyVisibility);
+// Faculty self-edit of Background / Qualifications (owner-only; GET returns full
+// content incl. hidden for the edit view, PATCH saves + validates).
+router.get("/faculty/:kerberos/profile-extras", directory.getFacultyProfileExtras);
+router.patch("/faculty/:kerberos/profile-extras", directory.updateFacultyProfileExtras);
 router.get("/:id", directory.getFacultiesById);
 
 export default router;
