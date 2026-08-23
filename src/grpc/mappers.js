@@ -22,6 +22,7 @@ export function mapDepartment(dept) {
     setOpt(out, "name", dept.name);
     setOpt(out, "code", dept.code);
     setOpt(out, "category", dept.category);
+    setOpt(out, "official_url", dept.officialUrl || dept.official_url);
     return out;
 }
 
@@ -49,6 +50,9 @@ export function mapFacultyCard(card) {
     if (dept) out.department = dept;
     setOpt(out, "profile_image_url", card.profileImageUrl);
     setOpt(out, "designation", card.designation);
+    out.affiliations = (Array.isArray(card.affiliations) ? card.affiliations : [])
+        .map(mapDepartment)
+        .filter(Boolean);
     return out;
 }
 
@@ -73,6 +77,9 @@ export function mapFaculty(f) {
     setOpt(out, "profile_image_url", f.profileImageUrl);
     setOpt(out, "designation", f.designation);
     setOpt(out, "working_from_year", f.workingFromYear);
+    out.affiliations = (Array.isArray(f.affiliations) ? f.affiliations : [])
+        .map(mapDepartment)
+        .filter(Boolean);
     return out;
 }
 

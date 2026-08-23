@@ -20,7 +20,8 @@ directory.getAllFaculties = asyncErrorHandler(async (req, res) => {
 directory.getFacultiesGroupedByDepartment = asyncErrorHandler(async (req, res) => {
     const { data, message, cached } = await directoryService.getFacultiesGroupedByDepartment({
         category: req.query.category,
-        summaryOnly: req.query.summaryOnly
+        summaryOnly: req.query.summaryOnly,
+        includeEmeritus: req.query.includeEmeritus
     });
     res.setHeader("X-Cache", cached ? "HIT" : "MISS");
     return successResponse(res, data, message, 200);
@@ -29,7 +30,8 @@ directory.getFacultiesGroupedByDepartment = asyncErrorHandler(async (req, res) =
 directory.getFacultiesForDepartmentGroup = asyncErrorHandler(async (req, res) => {
     const { data, message, cached } = await directoryService.getFacultiesForDepartmentGroup({
         departmentId: req.params.departmentId,
-        category: req.query.category
+        category: req.query.category,
+        includeEmeritus: req.query.includeEmeritus
     });
     res.setHeader("X-Cache", cached ? "HIT" : "MISS");
     return successResponse(res, data, message, 200);

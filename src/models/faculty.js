@@ -83,6 +83,13 @@ const facultySchema = new mongoose.Schema({
     designation:{
         type:String,
     },
+    // Public directory listing flag. "emeritus" hides the person from the
+    // default roster; the Faculty document is never deleted.
+    directory_status:{
+        type:String,
+        enum:['active','emeritus'],
+        default:'active',
+    },
     working_from_year:{
         type:Number,
     },

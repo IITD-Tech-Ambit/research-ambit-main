@@ -9,7 +9,10 @@ import {
     formatGroupedFaculties,
     DIRECTORY_CATEGORY_MAP,
     buildGroupedCategoryMatch,
-    facultyUnitsExpandStages
+    facultyUnitsExpandStages,
+    isPublicDirectoryUnit,
+    publicDirectoryUnitMatch,
+    activeFacultyMatch
 } from "../domain/facultyDirectory.js";
 import { CACHE_TTL_S, cachedPayload, dirCacheKey } from "./directoryCache.js";
 import * as repo from "./directoryRepository.js";
@@ -74,10 +77,11 @@ export const listFaculty = async ({ page, limit, sortBy, order } = {}) => {
     });
 };
 
-export const getFacultiesGroupedByDepartment = async ({ category, summaryOnly } = {}) => {
+export const getFacultiesGroupedByDepartment = async ({ category, summaryOnly, includeEmeritus } = {}) => {
     const cat = String(category ?? "all").trim().toLowerCase() || "all";
     const summary = summaryOnly === true || summaryOnly === "true";
-    const cacheKey = dirCacheKey("grouped", summary ? "summary" : "full", cat);
+    const showEmeritus = includeEmeritus === true || includeEmeritus === "true";
+    const cacheKey = dirCacheKey("grouped", summary ? "summary" : "full", cat, showEmeritus ? "em" : "active");
 
     return cachedPayload(cacheKey, CACHE_TTL_S, async () => {
         if (summary) {
@@ -86,7 +90,7 @@ export const getFacultiesGroupedByDepartment = async ({ category, summaryOnly } 
             // handful of distinct department references that came back (not all
             // 1,040 faculty rows) to their documents. Avoids the O(n×m) lookup+
             // unwind the non-summary path below needs for per-faculty fields.
-            const rawGroups = await repo.groupFacultyCountsByDepartment();
+            const rawGroups = await repo.groupFacultyCountsByDepartment(showEmeritus);
 
             const resolved = await Promise.all(
                 rawGroups.map(async (g) => ({
@@ -98,7 +102,7 @@ export const getFacultiesGroupedByDepartment = async ({ category, summaryOnly } 
             const categoryFilter = cat !== "all" && DIRECTORY_CATEGORY_MAP[cat];
             const merged = new Map();
             for (const { department, totalFaculty } of resolved) {
-                if (!department) continue;
+                if (!isPublicDirectoryUnit(department)) continue;
                 if (categoryFilter && department.category !== categoryFilter) continue;
                 const key = String(department._id);
                 const existing = merged.get(key);
@@ -107,7 +111,12 @@ export const getFacultiesGroupedByDepartment = async ({ category, summaryOnly } 
                 } else {
                     merged.set(key, {
                         _id: department._id,
-                        department: { _id: department._id, name: department.name },
+                        department: {
+                            _id: department._id,
+                            name: department.name,
+                            code: department.code,
+                            officialUrl: department.official_url
+                        },
                         stats: { totalFaculty }
                     });
                 }
@@ -159,6 +168,9 @@ export const getFacultiesGroupedByDepartment = async ({ category, summaryOnly } 
         }
 
         const pipeline = [
+            ...(Object.keys(activeFacultyMatch(showEmeritus)).length
+                ? [{ $match: activeFacultyMatch(showEmeritus) }]
+                : []),
             ...(preMatchStage ? [preMatchStage] : []),
             // Expand each faculty into one row per unit (department +
             // affiliations) so dual-affiliated faculty appear in every unit
@@ -168,6 +180,7 @@ export const getFacultiesGroupedByDepartment = async ({ category, summaryOnly } 
             // The expansion emits rows for all of a faculty's units; keep
             // only units of the requested category (e.g. drop the home
             // department row when browsing schools/centres).
+            { $match: publicDirectoryUnitMatch },
             ...(categoryDbValue
                 ? [{ $match: { "department.category": categoryDbValue } }]
                 : []),
@@ -178,7 +191,9 @@ export const getFacultiesGroupedByDepartment = async ({ category, summaryOnly } 
                     department: {
                         $first: {
                             _id: "$department._id",
-                            name: "$department.name"
+                            name: "$department.name",
+                            code: "$department.code",
+                            officialUrl: "$department.official_url"
                         }
                     },
                     faculties: { $push: facultyCardPushFields },
@@ -214,19 +229,20 @@ export const getFacultiesGroupedByDepartment = async ({ category, summaryOnly } 
     });
 };
 
-export const getFacultiesForDepartmentGroup = async ({ departmentId, category } = {}) => {
+export const getFacultiesForDepartmentGroup = async ({ departmentId, category, includeEmeritus } = {}) => {
     const cat = String(category ?? "all").trim().toLowerCase() || "all";
+    const showEmeritus = includeEmeritus === true || includeEmeritus === "true";
 
     if (!departmentId || !repo.isValidObjectId(departmentId)) {
         throw new BadRequestError("Valid department id is required");
     }
 
-    const cacheKey = dirCacheKey("grouped", "dept", cat, departmentId);
+    const cacheKey = dirCacheKey("grouped", "dept", cat, departmentId, showEmeritus ? "em" : "active");
 
     return cachedPayload(cacheKey, CACHE_TTL_S, async () => {
         const departmentObjectId = repo.toObjectId(departmentId);
-        const department = await repo.findDepartmentById(departmentObjectId, "name code category");
-        if (!department) {
+        const department = await repo.findDepartmentById(departmentObjectId, "name code category hidden");
+        if (!department || !isPublicDirectoryUnit(department)) {
             throw new NotFoundError("Department not found");
         }
         const categoryMatch = buildGroupedCategoryMatch(cat === "all" ? undefined : cat);
@@ -246,7 +262,12 @@ export const getFacultiesForDepartmentGroup = async ({ departmentId, category } 
         ];
         if (department.code) departmentMatchClauses.push({ department: department.code });
 
-        const facultyMatch = { $or: departmentMatchClauses };
+        const facultyMatch = {
+            $and: [
+                { $or: departmentMatchClauses },
+                activeFacultyMatch(showEmeritus)
+            ]
+        };
 
         const facultiesRaw = await repo.aggregateFaculties([
             { $match: facultyMatch },
