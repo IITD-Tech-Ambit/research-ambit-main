@@ -47,15 +47,30 @@ export const buildGroupedCategoryMatch = (category) => {
     return dbCategory ? { "department.category": dbCategory } : {};
 };
 
+/** Live academic units only. Hidden / Other docs stay in Mongo but are not listed. */
+export const isPublicDirectoryUnit = (department) =>
+    Boolean(department) &&
+    department.hidden !== true &&
+    department.category !== "Other";
+
+export const publicDirectoryUnitMatch = {
+    "department.hidden": { $ne: true },
+    "department.category": { $ne: "Other" }
+};
+
 export const normalizeDepartment = (department) => {
     if (!department) return null;
     return {
         _id: department._id,
         name: department.name,
         code: department.code,
-        category: department.category
+        category: department.category,
+        officialUrl: department.official_url || department.officialUrl || undefined
     };
 };
+
+export const activeFacultyMatch = (includeEmeritus) =>
+    includeEmeritus ? {} : { directory_status: { $ne: "emeritus" } };
 
 export const buildSubjectAreaMap = async (kerberosIds = [], expertIdToKerberos = new Map(), expertIdToScopusIds = new Map()) => {
     if (expertIdToKerberos.size === 0 && expertIdToScopusIds.size === 0) {
@@ -191,9 +206,13 @@ export const formatDirectoryFaculty = (facultyDoc, subjectMap, overrides = {}) =
         scopusId: pickPrimaryIdentifier(facultyDoc.scopus_id),
         googleScholarId: pickPrimaryIdentifier(facultyDoc.google_scholar_id),
         department: normalizeDepartment(department),
+        affiliations: (overrides.affiliations || [])
+            .map((unit) => normalizeDepartment(unit))
+            .filter(Boolean),
         tags: deriveDepartmentTags(department),
         profileImageUrl: facultyDoc.profile_image_url || null,
         designation: facultyDoc.designation || null,
+        directoryStatus: facultyDoc.directory_status === "emeritus" ? "emeritus" : "active",
         workingFromYear: typeof facultyDoc.working_from_year === "number" ? facultyDoc.working_from_year : null,
         // Flags for the frontend: owner toggles + hiding the computed papers/patents
         // counts that aren't part of this payload.
@@ -234,17 +253,17 @@ export const findDepartmentByReference = async (reference) => {
         return reference;
     }
     if (typeof reference === "string") {
-        const byCode = await Department.findOne({ code: reference }, "name code category").lean();
+        const byCode = await Department.findOne({ code: reference }, "name code category hidden official_url aliases").lean();
         if (byCode) return byCode;
         if (isPossibleObjectId(reference)) {
-            return Department.findById(reference, "name code category").lean();
+            return Department.findById(reference, "name code category hidden official_url aliases").lean();
         }
         return null;
     }
     if (typeof reference === "object" && reference._id != null) {
         const innerId = String(reference._id);
         if (isPossibleObjectId(innerId)) {
-            const dept = await Department.findById(innerId, "name code category").lean();
+            const dept = await Department.findById(innerId, "name code category hidden official_url aliases").lean();
             if (dept) return dept;
         }
     }
@@ -252,7 +271,7 @@ export const findDepartmentByReference = async (reference) => {
     if (typeof reference === "object" && typeof reference.toString === "function") {
         const asStr = String(reference);
         if (isPossibleObjectId(asStr)) {
-            return Department.findById(asStr, "name code category").lean();
+            return Department.findById(asStr, "name code category hidden official_url aliases").lean();
         }
     }
     return null;
@@ -287,6 +306,8 @@ export const facultyUnitsExpandStages = [
             pipeline: [
                 {
                     $match: {
+                        hidden: { $ne: true },
+                        category: { $ne: "Other" },
                         $expr: {
                             $or: [
                                 { $eq: ["$code", "$$unitRef"] },

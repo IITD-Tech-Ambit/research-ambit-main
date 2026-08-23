@@ -1,21 +1,27 @@
 import { BadRequestError, NotFoundError } from "../lib/customErrors.js";
 import {
-    findDepartmentByReference,
     isPossibleObjectId,
     buildSubjectAreaMap,
     formatDirectoryFaculty,
-    collectKerberosInfo
+    collectKerberosInfo,
+    isPublicDirectoryUnit
 } from "../domain/facultyDirectory.js";
 import { CACHE_TTL_S, cachedPayload, batchCacheKey, dirCacheKey } from "./directoryCache.js";
 import * as repo from "./directoryRepository.js";
 
-async function formatWithDepartments(faculties) {
-    const deptIds = faculties
-        .map((f) => f.department)
-        .filter(Boolean)
+function collectDeptRefs(faculties) {
+    const refs = [];
+    for (const faculty of faculties) {
+        if (faculty.department) refs.push(faculty.department);
+        for (const affiliation of faculty.affiliations || []) refs.push(affiliation);
+    }
+    return refs
         .map((d) => (typeof d === "object" && d._id ? String(d._id) : String(d)))
         .filter((id) => isPossibleObjectId(id));
-    const uniqueDeptIds = [...new Set(deptIds)];
+}
+
+async function formatWithDepartments(faculties) {
+    const uniqueDeptIds = [...new Set(collectDeptRefs(faculties))];
     const departmentDocs = uniqueDeptIds.length
         ? await repo.findDepartmentsByIds(uniqueDeptIds)
         : [];
@@ -39,6 +45,32 @@ function resolveDepartment(faculty, departmentById) {
     return null;
 }
 
+function resolveAffiliations(faculty, departmentById) {
+    const homeId = faculty.department
+        ? String(typeof faculty.department === "object" && faculty.department._id
+            ? faculty.department._id
+            : faculty.department)
+        : null;
+    const seen = new Set(homeId ? [homeId] : []);
+    const units = [];
+    for (const raw of faculty.affiliations || []) {
+        const key = typeof raw === "object" && raw._id ? String(raw._id) : String(raw);
+        if (seen.has(key)) continue;
+        const doc = (typeof raw === "object" && raw.name) ? raw : departmentById.get(key);
+        if (!doc || !isPublicDirectoryUnit(doc)) continue;
+        seen.add(key);
+        units.push(doc);
+    }
+    return units;
+}
+
+function formatFaculty(faculty, subjectMap, departmentById) {
+    return formatDirectoryFaculty(faculty, subjectMap, {
+        department: resolveDepartment(faculty, departmentById),
+        affiliations: resolveAffiliations(faculty, departmentById)
+    });
+}
+
 export const getFacultyByScopusId = async ({ scopusId } = {}) => {
     if (!scopusId || !String(scopusId).trim()) {
         throw new BadRequestError("No Scopus author id provided");
@@ -49,10 +81,8 @@ export const getFacultyByScopusId = async ({ scopusId } = {}) => {
         throw new NotFoundError("Faculty not found for this Scopus id");
     }
 
-    const department = await findDepartmentByReference(faculty.department);
-    const { kerberosIds: bsKids, expertIdToKerberos: bsE2k, expertIdToScopusIds: bsS2k } = collectKerberosInfo([faculty]);
-    const subjectMap = await buildSubjectAreaMap(bsKids, bsE2k, bsS2k);
-    const facultyResponse = formatDirectoryFaculty(faculty, subjectMap, { department });
+    const { departmentById, subjectMap } = await formatWithDepartments([faculty]);
+    const facultyResponse = formatFaculty(faculty, subjectMap, departmentById);
 
     return { data: facultyResponse, message: "Faculty fetched successfully", cached: false };
 };
@@ -85,8 +115,7 @@ export const resolveFacultiesByScopusIds = async ({ scopusIds } = {}) => {
 
         const matches = {};
         for (const faculty of faculties) {
-            const department = resolveDepartment(faculty, departmentById);
-            const formatted = formatDirectoryFaculty(faculty, subjectMap, { department });
+            const formatted = formatFaculty(faculty, subjectMap, departmentById);
             for (const sid of faculty.scopus_id || []) {
                 const key = String(sid).trim();
                 if (ids.includes(key)) {
@@ -129,11 +158,7 @@ export const resolveFacultiesByKerberos = async ({ kerberosIds } = {}) => {
         for (const faculty of faculties) {
             const kerberos = String(faculty.email || "").split("@")[0].toLowerCase();
             if (ids.includes(kerberos)) {
-                matches[kerberos] = formatDirectoryFaculty(
-                    faculty,
-                    subjectMap,
-                    { department: resolveDepartment(faculty, departmentById) }
-                );
+                matches[kerberos] = formatFaculty(faculty, subjectMap, departmentById);
             }
         }
 
@@ -150,10 +175,8 @@ export const getFacultiesById = async ({ id } = {}) => {
         throw new NotFoundError("Faculty not found");
     }
 
-    const department = await findDepartmentByReference(faculty.department);
-    const { kerberosIds: fbKids, expertIdToKerberos: fbE2k, expertIdToScopusIds: fbS2k } = collectKerberosInfo([faculty]);
-    const subjectMap = await buildSubjectAreaMap(fbKids, fbE2k, fbS2k);
-    const facultyResponse = formatDirectoryFaculty(faculty, subjectMap, { department });
+    const { departmentById, subjectMap } = await formatWithDepartments([faculty]);
+    const facultyResponse = formatFaculty(faculty, subjectMap, departmentById);
 
     return { data: facultyResponse, message: "Faculty fetched successfully", cached: false };
 };
@@ -171,10 +194,8 @@ export const getFacultyByKerberos = async ({ kerberos } = {}) => {
             throw new NotFoundError("Faculty not found for this kerberos");
         }
 
-        const department = await findDepartmentByReference(faculty.department);
-        const { kerberosIds: fkKids, expertIdToKerberos: fkE2k, expertIdToScopusIds: fkS2k } = collectKerberosInfo([faculty]);
-        const subjectMap = await buildSubjectAreaMap(fkKids, fkE2k, fkS2k);
-        const facultyResponse = formatDirectoryFaculty(faculty, subjectMap, { department });
+        const { departmentById, subjectMap } = await formatWithDepartments([faculty]);
+        const facultyResponse = formatFaculty(faculty, subjectMap, departmentById);
 
         // Profile-only sections (Background / Qualifications). Added here — NOT in
         // the shared formatDirectoryFaculty — so they never leak into directory

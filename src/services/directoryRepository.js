@@ -85,10 +85,10 @@ export function findDepartmentById(id, projection) {
 }
 
 export function findDepartmentsByCategory(category, projection = "_id code") {
-    return Department.find({ category }, projection).lean();
+    return Department.find({ category, hidden: { $ne: true } }, projection).lean();
 }
 
-export function findDepartmentsByIds(ids, projection = "name code category") {
+export function findDepartmentsByIds(ids, projection = "name code category hidden official_url aliases") {
     return Department.find({ _id: { $in: ids } }, projection).lean();
 }
 
@@ -104,10 +104,12 @@ export function aggregateFaculties(pipeline) {
     return Faculty.aggregate(pipeline);
 }
 
-export function groupFacultyCountsByDepartment() {
+export function groupFacultyCountsByDepartment(includeEmeritus = false) {
     // Count by directory unit: home department plus any school/centre
     // affiliations, so dual-affiliated faculty appear under both.
+    const statusMatch = includeEmeritus ? [] : [{ $match: { directory_status: { $ne: "emeritus" } } }];
     return Faculty.aggregate([
+        ...statusMatch,
         {
             $project: {
                 units: {
