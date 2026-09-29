@@ -54,6 +54,16 @@ export function updateFacultyProfileExtrasByKerberos(kerberos, fields) {
     if (Array.isArray(fields.qualifications)) set.qualifications = fields.qualifications;
     if (typeof fields.background_visible === "boolean") set.background_visible = fields.background_visible;
     if (typeof fields.qualifications_visible === "boolean") set.qualifications_visible = fields.qualifications_visible;
+    if (Array.isArray(fields.awards)) set.awards = fields.awards;
+    if (typeof fields.awards_visible === "boolean") set.awards_visible = fields.awards_visible;
+    if (Array.isArray(fields.custom_research_areas)) set.custom_research_areas = fields.custom_research_areas;
+    if (Array.isArray(fields.additional_emails)) set.additional_emails = fields.additional_emails;
+    if (typeof fields.phone === "string") set.phone = fields.phone;
+    if (typeof fields.phone_visible === "boolean") set.phone_visible = fields.phone_visible;
+    if (typeof fields.office_address === "string") set.office_address = fields.office_address;
+    if (typeof fields.office_address_visible === "boolean") set.office_address_visible = fields.office_address_visible;
+    if (Array.isArray(fields.external_links)) set.external_links = fields.external_links;
+    if (typeof fields.external_links_visible === "boolean") set.external_links_visible = fields.external_links_visible;
     if (Object.keys(set).length === 0) return Promise.resolve(null);
     return Faculty.findOneAndUpdate(
         { email: new RegExp("^" + escaped + "@", "i") },
