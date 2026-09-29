@@ -80,6 +80,59 @@ const facultySchema = new mongoose.Schema({
         type:Boolean,
         default:false,
     },
+    // Awards & Honors — faculty-managed, same show/hide model as qualifications.
+    awards:{
+        type:[String],
+        default:[],
+    },
+    awards_visible:{
+        type:Boolean,
+        default:false,
+    },
+    // Faculty-added research areas. Shown ALONGSIDE the auto-computed
+    // dominant_domains, but rendered as plain (non-clickable) text since they
+    // don't map to a taxonomy domain slug. The faculty can add/remove only
+    // these — never the computed dominant_domains.
+    custom_research_areas:{
+        type:[String],
+        default:[],
+    },
+    // Extra contact emails the faculty chooses to list. The primary `email`
+    // (kerberos) is the DB key and is never stored/removed here.
+    additional_emails:{
+        type:[String],
+        default:[],
+    },
+    // Contact number + office address, each independently show/hide-able.
+    phone:{
+        type:String,
+    },
+    phone_visible:{
+        type:Boolean,
+        default:false,
+    },
+    office_address:{
+        type:String,
+    },
+    office_address_visible:{
+        type:Boolean,
+        default:false,
+    },
+    // Faculty-defined external links (personal site, lab page, LinkedIn, ORCID,
+    // anything) — each has a faculty-chosen label. Shown alongside the existing
+    // Scopus / Google Scholar links. Content is kept even while hidden.
+    external_links:{
+        type:[{
+            label:{ type:String, default:"" },
+            url:{ type:String, required:true },
+            _id:false,
+        }],
+        default:[],
+    },
+    external_links_visible:{
+        type:Boolean,
+        default:false,
+    },
     designation:{
         type:String,
     },

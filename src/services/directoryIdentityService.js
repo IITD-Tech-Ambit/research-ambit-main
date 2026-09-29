@@ -210,6 +210,38 @@ export const getFacultyByKerberos = async ({ kerberos } = {}) => {
         facultyResponse.background = backgroundVisible ? (faculty.background || "") : null;
         facultyResponse.qualifications = qualificationsVisible ? (faculty.qualifications || []) : null;
 
+        // Awards & Honors — same show/hide contract as qualifications.
+        const awardsVisible = faculty.awards_visible === true;
+        facultyResponse.awardsVisible = awardsVisible;
+        facultyResponse.awards = awardsVisible ? (faculty.awards || []) : null;
+
+        // Faculty-added research areas (non-clickable; no toggle — shown when present).
+        facultyResponse.customResearchAreas = Array.isArray(faculty.custom_research_areas)
+            ? faculty.custom_research_areas
+            : [];
+
+        // Extra emails listed alongside the primary (kerberos) email.
+        facultyResponse.additionalEmails = Array.isArray(faculty.additional_emails)
+            ? faculty.additional_emails
+            : [];
+
+        // Contact number + office address, each independently toggled.
+        const phoneVisible = faculty.phone_visible === true;
+        facultyResponse.phoneVisible = phoneVisible;
+        facultyResponse.phone = phoneVisible ? (faculty.phone || "") : null;
+        const officeAddressVisible = faculty.office_address_visible === true;
+        facultyResponse.officeAddressVisible = officeAddressVisible;
+        facultyResponse.officeAddress = officeAddressVisible ? (faculty.office_address || "") : null;
+
+        // External links (faculty-labelled) — same show/hide contract as the
+        // other sections: content is null unless the faculty has toggled it on.
+        const externalLinksVisible = faculty.external_links_visible === true;
+        facultyResponse.externalLinksVisible = externalLinksVisible;
+        facultyResponse.externalLinks = externalLinksVisible
+            ? (Array.isArray(faculty.external_links) ? faculty.external_links : [])
+                .map((l) => ({ label: l.label || "", url: l.url }))
+            : null;
+
         return { message: "Faculty fetched successfully", data: facultyResponse };
     });
 };
