@@ -21,6 +21,14 @@ export const pickPrimaryIdentifier = (value) => {
     return typeof value === "string" && value.trim().length > 0 ? value : undefined;
 };
 
+export const listIdentifiers = (value) => {
+    const items = Array.isArray(value) ? value : [value];
+    const ids = items
+        .map((item) => (item == null ? "" : String(item).trim()))
+        .filter((item) => item.length > 0);
+    return [...new Set(ids)];
+};
+
 // Query-param category tag -> DB category string. Single source of truth —
 // deriveDepartmentTags below derives its reverse mapping from this instead
 // of duplicating the category list in a separate if/else chain.
@@ -204,6 +212,7 @@ export const formatDirectoryFaculty = (facultyDoc, subjectMap, overrides = {}) =
         dominant_domains: formatDominantDomains(facultyDoc),
         orcId: pickPrimaryIdentifier(facultyDoc.orcid_id),
         scopusId: pickPrimaryIdentifier(facultyDoc.scopus_id),
+        scopusIds: listIdentifiers(facultyDoc.scopus_id),
         googleScholarId: pickPrimaryIdentifier(facultyDoc.google_scholar_id),
         department: normalizeDepartment(department),
         affiliations: (overrides.affiliations || [])
