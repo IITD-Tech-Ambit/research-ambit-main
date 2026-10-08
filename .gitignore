@@ -70,3 +70,6 @@ data/knowledge-graph/
 # One-time schools/centres migration input (not read at runtime).
 # department-sheet-roster.json is unused at runtime (kept for reference only).
 data/schools-centres-pdf.json
+
+# One-off DB data backups (e.g. faculty scopus_id reorder), not code
+scopus-primary-reorder-backup-*.json
