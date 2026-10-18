@@ -30,7 +30,8 @@ const GRPC_BIND_ADDRESS = process.env.GRPC_BIND_ADDRESS || "0.0.0.0:50055";
 /** Build the fully-wired grpc.Server without binding (useful for tests). */
 export function buildGrpcServer() {
     const pkg = loadPackage("directory/v1/directory.proto").directory.v1;
-    const server = new grpc.Server();
+    // Room for one 5 MB image upload plus protobuf overhead.
+    const server = new grpc.Server({ "grpc.max_receive_message_length": 8 * 1024 * 1024 });
 
     server.addService(pkg.DirectoryService.service, createDirectoryHandlers(directoryService));
     server.addService(pkg.KnowledgeGraphService.service, createKgHandlers(kgService));

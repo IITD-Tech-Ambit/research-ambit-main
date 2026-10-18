@@ -9,7 +9,6 @@ user.register = asyncErrorHandler(async (req, res) => {
         name: req.body?.name,
         email: req.body?.email,
         password: req.body?.password,
-        role: req.body?.role,
         profileImgPath: req.file?.path || null,
         profileImgUrl: req.body?.profile_img,
     });

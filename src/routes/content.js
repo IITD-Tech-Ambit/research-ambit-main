@@ -6,7 +6,11 @@ const router = e.Router();
 
 
 
-const upload = multer({ dest: '/tmp/' });
+const upload = multer({
+    dest: '/tmp/',
+    limits: { fileSize: 5 * 1024 * 1024, files: 1 },
+    fileFilter: (_req, file, cb) => cb(null, /^image\//.test(file.mimetype)),
+});
 
 router.get('/', cms.getAllContent);
 router.get('/paginated', cms.getPaginatedContent);

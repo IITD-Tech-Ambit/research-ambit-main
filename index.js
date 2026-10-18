@@ -15,6 +15,14 @@ import { startGrpcServer, stopGrpcServer, GRPC_BIND_ADDRESS } from "./src/grpc/s
 
 dotenv.config({ quiet: true });
 
+if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32) {
+  console.error("JWT_SECRET must be at least 32 characters — refusing to start with a weak CMS signing key");
+  process.exit(1);
+}
+if (process.env.NODE_ENV === "production" && !process.env.GATEWAY_SHARED_SECRET) {
+  console.warn("GATEWAY_SHARED_SECRET is not set — x-user-* headers are trusted without proof they came from the api-gateway");
+}
+
 const app = express();
 const PORT = process.env.PORT || 3002;
 
