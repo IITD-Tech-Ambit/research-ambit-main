@@ -14,7 +14,14 @@ import { BadRequestError, ValidationError, InternalServerError, NotFoundError } 
 import User from "../models/user.js";
 import { uploadToCloudinary, deleteFromCloudinary } from "../lib/cloudinary.js";
 
-export const register = async ({ name, email, password, role, profileImgPath, profileImgUrl } = {}) => {
+// API responses omit the password hash.
+const toSafeUser = (user) => {
+    const { password: _hash, ...safe } = user.toObject();
+    return safe;
+};
+
+// Register always stores role "user"; admins are promoted in the DB.
+export const register = async ({ name, email, password, profileImgPath, profileImgUrl } = {}) => {
     let profile_img = profileImgUrl || "";
 
     if (profileImgPath) {
@@ -33,11 +40,11 @@ export const register = async ({ name, email, password, role, profileImgPath, pr
         throw new ValidationError("Validation Error", errors);
     }
     const hashedPassword = await bcrypt.hash(password, 10);
-    const user = await User.create({ name, email, password: hashedPassword, profile_img, role });
+    const user = await User.create({ name, email, password: hashedPassword, profile_img, role: "user" });
     if (!user) {
         throw new InternalServerError("Failed to create user");
     }
-    return { data: user, message: "User created successfully", statusCode: 201 };
+    return { data: toSafeUser(user), message: "User created successfully", statusCode: 201 };
 };
 
 export const login = async ({ email, password } = {}) => {
@@ -48,14 +55,11 @@ export const login = async ({ email, password } = {}) => {
         throw new ValidationError("Validation Error", errors);
     }
     const user = await User.findOne({ email });
-    if (!user) {
-        throw new NotFoundError("User not found");
-    }
-    const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) {
-        throw new BadRequestError("Invalid password");
+    if (!user || !(await bcrypt.compare(password, user.password))) {
+        throw new BadRequestError("Invalid email or password");
     }
     const token = jwt.sign({ id: user._id, email: user.email, role: user.role }, process.env.JWT_SECRET, {
+        algorithm: "HS256",
         expiresIn: '1h'
     });
     return { data: { token }, message: "Login successful" };
@@ -96,7 +100,7 @@ export const editUser = async ({ name, password, profileImgPath, profileImgUrl }
     }
 
     await user.save();
-    return { data: user, message: "User updated successfully" };
+    return { data: toSafeUser(user), message: "User updated successfully" };
 };
 
 export const deleteUser = async ({ email } = {}) => {
@@ -108,5 +112,5 @@ export const deleteUser = async ({ email } = {}) => {
         await deleteFromCloudinary(user.profile_img);
     }
     await user.deleteOne();
-    return { data: user, message: "User deleted successfully" };
+    return { data: toSafeUser(user), message: "User deleted successfully" };
 };

@@ -11,7 +11,7 @@ export const getUserId = (token) => {
     const mainToken = token.split(" ")[1];
 
     try {
-        const decoded = jwt.verify(mainToken, process.env.JWT_SECRET);
+        const decoded = jwt.verify(mainToken, process.env.JWT_SECRET, { algorithms: ["HS256"] });
         return decoded.id;
     } catch (error) {
         return null;

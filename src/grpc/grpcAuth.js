@@ -39,7 +39,7 @@ export function optionalAuth(metadata) {
         return { userId: null, authProvided: true };
     }
     try {
-        const decoded = jwt.verify(authHeader.split(" ")[1], process.env.JWT_SECRET);
+        const decoded = jwt.verify(authHeader.split(" ")[1], process.env.JWT_SECRET, { algorithms: ["HS256"] });
         return { userId: decoded.id, authProvided: true };
     } catch {
         return { userId: null, authProvided: true };

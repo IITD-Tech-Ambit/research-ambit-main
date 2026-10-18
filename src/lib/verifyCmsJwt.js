@@ -16,7 +16,7 @@ export function verifyCmsJwt(token, roles = []) {
 
     let decoded;
     try {
-        decoded = jwt.verify(token, process.env.JWT_SECRET);
+        decoded = jwt.verify(token, process.env.JWT_SECRET, { algorithms: ["HS256"] });
     } catch {
         throw new UnauthorizedError("Invalid token");
     }
