@@ -6,10 +6,30 @@ import { updateFacultyImageByKerberos, updateFacultyVisibilityByKerberos, update
 import { uploadToCloudinary } from "../lib/cloudinary.js";
 import { cacheDelByPrefix } from "../lib/cache.js";
 import { DIR_CACHE_PREFIX } from "../services/directoryCache.js";
+import { isFromGateway } from "../lib/gatewayIdentity.js";
 
 let directory = {};
 
 const safeUnlink = (p) => { try { if (p) fs.unlinkSync(p); } catch { /* already gone */ } };
+
+const denyProfileEdit = (req, kerberos) => {
+    if (!isFromGateway(req)) return { status: 401, message: "Not authenticated." };
+    const authKerberos = String(req.headers["x-user-kerberos"] || "").toLowerCase();
+    const isSuperAdmin = req.headers["x-user-role"] === "superadmin";
+    if (isSuperAdmin) {
+        if (req.method !== "GET") console.info(JSON.stringify({
+            event: "superadmin_profile_edit",
+            kerberos,
+            action: `${req.method} ${req.path}`,
+            by: req.headers["x-user-id"],
+            at: new Date().toISOString(),
+        }));
+        return null;
+    }
+    if (!authKerberos) return { status: 401, message: "Not authenticated." };
+    if (authKerberos !== kerberos) return { status: 403, message: "You can only edit your own profile." };
+    return null;
+};
 
 directory.getAllFaculties = asyncErrorHandler(async (req, res) => {
     const { data, message, cached } = await directoryService.listFaculty(req.query);
@@ -90,22 +110,15 @@ directory.getFacultyPublications = asyncErrorHandler(async (req, res) => {
     return successResponse(res, data, message, 200);
 });
 
-// Faculty self-service: replace one's own profile image. The gateway verifies
-// the ra_session and injects the trusted x-user-kerberos header; a faculty may
-// only edit their OWN profile (header kerberos must equal the path kerberos).
-// Uploads to Cloudinary (faculty_images), stores the new URL on the faculty
+// Faculty self-service: replace a profile image (owner or superadmin, see
+// denyProfileEdit). Uploads to Cloudinary (faculty_images), stores the new URL on the faculty
 // doc, and flushes the directory cache so the image updates everywhere at once.
 directory.updateFacultyImage = asyncErrorHandler(async (req, res) => {
     const kerberos = String(req.params.kerberos || "").toLowerCase();
-    const authKerberos = String(req.headers["x-user-kerberos"] || "").toLowerCase();
-
-    if (!authKerberos) {
+    const denied = denyProfileEdit(req, kerberos);
+    if (denied) {
         safeUnlink(req.file?.path);
-        return res.status(401).json({ success: false, message: "Not authenticated." });
-    }
-    if (authKerberos !== kerberos) {
-        safeUnlink(req.file?.path);
-        return res.status(403).json({ success: false, message: "You can only edit your own profile." });
+        return res.status(denied.status).json({ success: false, message: denied.message });
     }
     if (!req.file?.path) {
         return res.status(400).json({ success: false, message: "No image file provided." });
@@ -129,18 +142,14 @@ directory.updateFacultyImage = asyncErrorHandler(async (req, res) => {
 });
 
 // Faculty self-service: toggle which of their metrics (h_index / citations /
-// papers / patents) are visible. Owner-only. Values are never deleted — a hidden
+// papers / patents) are visible. Owner or superadmin. Values are never deleted — a hidden
 // metric is just flagged, so it can be shown again later. Flushes the directory
 // cache so the change takes effect everywhere at once.
 directory.updateFacultyVisibility = asyncErrorHandler(async (req, res) => {
     const kerberos = String(req.params.kerberos || "").toLowerCase();
-    const authKerberos = String(req.headers["x-user-kerberos"] || "").toLowerCase();
-
-    if (!authKerberos) {
-        return res.status(401).json({ success: false, message: "Not authenticated." });
-    }
-    if (authKerberos !== kerberos) {
-        return res.status(403).json({ success: false, message: "You can only edit your own profile." });
+    const denied = denyProfileEdit(req, kerberos);
+    if (denied) {
+        return res.status(denied.status).json({ success: false, message: denied.message });
     }
 
     const body = req.body || {};
@@ -253,20 +262,16 @@ const profileExtrasPayload = (doc) => ({
     primaryEmail: doc.email || "",
 });
 
-// Faculty self-service: read one's OWN editable profile sections (background,
-// qualifications, awards, contact, links, ...) for editing. Owner-only. Unlike
+// Faculty self-service: read the editable profile sections (background,
+// qualifications, awards, contact, links, ...) for editing. Owner or superadmin. Unlike
 // the public profile read, this returns the full content even when a section is
 // hidden, so the owner can edit hidden text in edit mode. The public
 // /faculty/:kerberos/profile read redacts hidden content.
 directory.getFacultyProfileExtras = asyncErrorHandler(async (req, res) => {
     const kerberos = String(req.params.kerberos || "").toLowerCase();
-    const authKerberos = String(req.headers["x-user-kerberos"] || "").toLowerCase();
-
-    if (!authKerberos) {
-        return res.status(401).json({ success: false, message: "Not authenticated." });
-    }
-    if (authKerberos !== kerberos) {
-        return res.status(403).json({ success: false, message: "You can only edit your own profile." });
+    const denied = denyProfileEdit(req, kerberos);
+    if (denied) {
+        return res.status(denied.status).json({ success: false, message: denied.message });
     }
 
     const faculty = await resolveFacultyByKerberos(kerberos);
@@ -277,20 +282,16 @@ directory.getFacultyProfileExtras = asyncErrorHandler(async (req, res) => {
     return successResponse(res, profileExtrasPayload(faculty), "Profile extras fetched.", 200);
 });
 
-// Faculty self-service: save one's OWN Background / Qualifications sections and
-// their visibility. Owner-only. Content is stored even when a section is hidden
+// Faculty self-service: save the Background / Qualifications sections and
+// their visibility. Owner or superadmin. Content is stored even when a section is hidden
 // (kept in the DB so it can be shown again). Validation is enforced ONLY when a
 // section is being shown: background >= 100 chars, qualifications >= 1 item.
 // Flushes the directory cache so the change shows on the profile at once.
 directory.updateFacultyProfileExtras = asyncErrorHandler(async (req, res) => {
     const kerberos = String(req.params.kerberos || "").toLowerCase();
-    const authKerberos = String(req.headers["x-user-kerberos"] || "").toLowerCase();
-
-    if (!authKerberos) {
-        return res.status(401).json({ success: false, message: "Not authenticated." });
-    }
-    if (authKerberos !== kerberos) {
-        return res.status(403).json({ success: false, message: "You can only edit your own profile." });
+    const denied = denyProfileEdit(req, kerberos);
+    if (denied) {
+        return res.status(denied.status).json({ success: false, message: denied.message });
     }
 
     // The primary (kerberos) email must never be removed or duplicated — the DB

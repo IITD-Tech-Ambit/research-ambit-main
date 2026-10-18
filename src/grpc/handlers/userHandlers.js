@@ -1,8 +1,9 @@
 /**
  * directory.v1.UserService handlers (CMS accounts — NOT IITD OAuth). Register/
- * Edit/Delete echo raw Mongoose user docs, so they ride JsonDataResponse;
- * Login returns the typed { token }. Edit/Delete re-run the same JWT/role gate
- * the REST middleware applies (any-user for edit, admin for delete).
+ * Edit/Delete echo user objects, so they ride JsonDataResponse;
+ * Login returns the typed { token }. Register/Edit/Delete re-run the same
+ * JWT/role gate the REST middleware applies (admin for register and delete,
+ * any user for edit).
  */
 import { unary } from "../handlerUtils.js";
 import { requireAuth } from "../grpcAuth.js";
@@ -10,12 +11,12 @@ import { writeUploadToTemp } from "../fileUpload.js";
 
 export function createUserHandlers(userService) {
     return {
-        Register: unary(async ({ request: r }) => {
+        Register: unary(async ({ request: r, metadata }) => {
+            requireAuth(metadata, ["admin"]);
             const { data } = await userService.register({
                 name: r.name,
                 email: r.email,
                 password: r.password,
-                role: r.role,
                 profileImgPath: writeUploadToTemp(r.profile_img),
                 profileImgUrl: r.profile_img_url,
             });
