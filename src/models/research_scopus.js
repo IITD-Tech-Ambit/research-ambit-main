@@ -14,7 +14,7 @@ const SourceSchema = new mongoose.Schema({
     issn: {
         type: String,
     },
-}, { _id: false });
+}, { _id: false, strict: false });
 
 const AuthorSchema = new mongoose.Schema({
     author_id: {
@@ -55,6 +55,9 @@ const ResearchMetaDataScopus = new mongoose.Schema({
     },
     source: {
         type: SourceSchema,
+    },
+    source_relationship: {
+        type: mongoose.Schema.Types.Mixed,
     },
     citation_count: {
         type: Number,
