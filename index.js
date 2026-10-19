@@ -12,6 +12,8 @@ import { connectToRedis } from "./src/lib/redis.js";
 import router from "./src/routes/index.js";
 import { metricsMiddleware, startMetricsServer } from "./src/lib/metrics.js";
 import { startGrpcServer, stopGrpcServer, GRPC_BIND_ADDRESS } from "./src/grpc/server.js";
+import { startProfileUpdateWorker } from "./src/services/profileUpdateNotifier.js";
+import { closeTransporter } from "./src/lib/mailTransport.js";
 
 dotenv.config({ quiet: true });
 
@@ -71,8 +73,13 @@ const GRPC_ENABLED = process.env.GRPC_ENABLED !== "false";
 const isLeadWorker = !process.env.NODE_APP_INSTANCE || process.env.NODE_APP_INSTANCE === "0";
 
 let grpcServer = null;
+let stopProfileMail = () => {};
 
 if (!process.env.VERCEL) {
+  // Notices are claimed atomically, so this is also safe with several containers;
+  // one sender per container just keeps SMTP connections to a minimum.
+  if (isLeadWorker) stopProfileMail = startProfileUpdateWorker();
+
   app.listen(PORT, () => {
     console.log(`Server is running on http://localhost:${PORT}`);
     startMetricsServer();
@@ -93,6 +100,8 @@ export default app;
 
 const shutdown = async (signal) => {
   console.log(`${signal} received. Shutting down gracefully...`);
+  await stopProfileMail();
+  closeTransporter();
   try {
     await stopGrpcServer(grpcServer);
   } catch (err) {
