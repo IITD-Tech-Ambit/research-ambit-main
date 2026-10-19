@@ -155,6 +155,22 @@ change takes effect everywhere immediately.
 > these back through gRPC will silently break metric hiding. Any *new* profile
 > field faces the same constraint.
 
+## Local development
+
+Use a MongoDB, Redis, and Cloudinary cloud that are not the production ones. A process pointed at the VM stores is writing the live site.
+
+**Profile-update mail.** A change the faculty member makes to their own photo, metric visibility, or profile extras inserts a row in `profile_update_notices`. A superadmin editing someone else's profile does not. This process sends it after `PROFILE_MAIL_QUIET_MINUTES` (default 10) without a further edit, and no later than `PROFILE_MAIL_MAX_WAIT_MINUTES` (default 30) after the first edit. The worker starts only when `MAIL_USER` and `MAIL_PASS` are both set and `PROFILE_UPDATE_EMAILS` is not `false`.
+
+- `MAIL_PROD=true` sends the notice to that faculty member. The address is the directory email when it is `@iitd.ac.in` (any subdomain), and `<kerberos>@iitd.ac.in` otherwise. Set `MAIL_PROD=true` only on the production deployment.
+- Any other value, including unset, redirects the notice to `MAIL_DEV_TO`. The default is `ch7221511@iitd.ac.in`, a real mailbox. Set `MAIL_DEV_TO` to your own address. The send throws if the recipient is not that address.
+- The production backend polls the same collection. A faculty member's own edit saved in the production database is mailed by that deployment, including when this laptop has `MAIL_PROD` unset. A superadmin edit is not.
+
+**Suggestion mail.** With SMTP configured, a suggestion goes to `MAIL_TO`. If `MAIL_TO` is unset and `NODE_ENV` is `production`, the recipient is `researchambit@iitd.ac.in`. Otherwise it is `MAIL_DEV_TO`. This path does not read `MAIL_PROD`.
+
+**SMTP.** `NODE_ENV=production` always uses `smtp.iitd.ac.in:465`. `MAIL_HOST` is ignored in that case. Outside production, `MAIL_HOST` may point at a local catcher.
+
+`npm run mail:test` addresses only `MAIL_DEV_TO`. `--preview` writes HTML and does not send. `--verify` checks the SMTP login and does not send. The Atlas commands in [Atlas data](#atlas-data-mongodb) replace the published atlas when `MONGO_URI` is the production database. Leave `MAIL_PROD` unset or `false` on every developer machine.
+
 ## Prerequisites
 
 - [Node.js](https://nodejs.org/) 20+

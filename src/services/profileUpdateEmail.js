@@ -1,8 +1,3 @@
-/**
- * Pure helpers for the "your profile was updated" email: snapshot the
- * faculty-editable fields, describe what changed between two snapshots, and
- * render the email. No I/O, so it is unit-tested directly.
- */
 import { fileURLToPath } from 'url';
 import { replyToAddress } from '../lib/mailTransport.js';
 
@@ -31,8 +26,6 @@ const strList = (value) => (Array.isArray(value) ? value.map((v) => String(v ?? 
 export const facultyDisplayName = (doc = {}) =>
     [doc.title, doc.firstName, doc.lastName].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
 
-/** The faculty-editable fields of a Faculty doc, normalised so two snapshots
- * of an unchanged profile are always deep-equal. */
 export const snapshotProfile = (doc = {}) => {
     const vis = doc.metric_visibility || {};
     return {
@@ -79,12 +72,6 @@ const visibilityChange = (nowVisible) =>
         ? { type: 'shown', text: 'Section is now shown on your public profile' }
         : { type: 'hidden', text: 'Section is now hidden from your public profile' };
 
-/**
- * Changes between two snapshots, grouped by profile section:
- * [{ title, changes: [{ type, text, from?, to? }], imageUrl?, previousImageUrl?, quote? }]
- * where type is added | removed | changed | updated | shown | hidden.
- * Empty when nothing net changed.
- */
 export const describeProfileChanges = (baseline = {}, latest = {}) => {
     const b = snapshotProfile(baseline);
     const a = snapshotProfile(latest);
@@ -156,7 +143,7 @@ const IST = 'Asia/Kolkata';
 const fmtDate = (d) => new Date(d).toLocaleDateString('en-IN', { timeZone: IST, day: 'numeric', month: 'long', year: 'numeric' });
 const fmtTime = (d) => new Date(d).toLocaleTimeString('en-IN', { timeZone: IST, hour: 'numeric', minute: '2-digit', hour12: true }).toUpperCase();
 
-export const describeWhen = (first, last) => {
+const describeWhen = (first, last) => {
     const start = new Date(first);
     const end = new Date(last || first);
     if (end - start < 60_000) return `on ${fmtDate(start)} at ${fmtTime(start)} IST`;
@@ -202,8 +189,6 @@ const initialsOf = (name = '') => {
     return ((words[0]?.[0] || '') + (words.length > 1 ? words[words.length - 1][0] : '')).toUpperCase() || '?';
 };
 
-/** A small square, face-centred rendition for Cloudinary URLs; others unchanged. */
-// Older uploads stored Cloudinary's http:// URL; Cloudinary serves the same path over https.
 const toHttps = (url = '') => url.replace(/^http:\/\/res\.cloudinary\.com\//i, 'https://res.cloudinary.com/');
 
 const thumbnail = (url, size) => {
@@ -215,7 +200,7 @@ const thumbnail = (url, size) => {
 
 const safeImage = (url) => /^https:\/\//i.test(toHttps(url || ''));
 
-export const SEAL_CID = 'iitd-seal@researchambit';
+const SEAL_CID = 'iitd-seal@researchambit';
 export const sealAttachment = () => ({
     filename: 'iitd-seal.png',
     path: fileURLToPath(new URL('../../assets/email/iitd-seal.png', import.meta.url)),
@@ -229,7 +214,6 @@ const replyBody = (address) =>
     `If you didn't make them, or something on your profile looks wrong, just reply to this email or write to ${address}, and the Research Ambit team will look into it.`;
 
 const FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif";
-// Long URLs and email addresses must wrap instead of widening the layout on phones.
 const WRAP = 'word-break:break-word;overflow-wrap:anywhere;';
 const C = {
     primary: '#1b54da', primaryDark: '#163fa8', accent: '#22c3be', ink: '#0f172a', body: '#334155',
@@ -300,16 +284,6 @@ const sectionHtml = (s, isLast) => `
 const sectionList = (titles) =>
     titles.length <= 2 ? titles.join(' and ') : `${titles.slice(0, -1).join(', ')} and ${titles[titles.length - 1]}`;
 
-/**
- * @param {{ name: string, kerberos: string, sections: ReturnType<typeof describeProfileChanges>,
- *   actors: {kind: string}[], firstChangeAt: Date, lastChangeAt: Date, profileUrl: string,
- *   facultyEmail?: string, photoUrl?: string, replyTo?: string, sealSrc?: string,
- *   devRedirectedFrom?: string }} input
- *   facultyEmail = the address the notice is for; photoUrl = the faculty's current photo; replyTo = the support address named in
- *   the email; sealSrc = image source for the IIT Delhi seal (defaults to the
- *   inline attachment); devRedirectedFrom = the real recipient, when the mail is
- *   being redirected to the dev inbox instead.
- */
 export const buildProfileUpdateEmail = ({
     name, kerberos, sections, actors, firstChangeAt, lastChangeAt, profileUrl, facultyEmail, photoUrl,
     replyTo = replyToAddress(), sealSrc = `cid:${SEAL_CID}`, devRedirectedFrom,

@@ -1,11 +1,5 @@
 import mongoose from 'mongoose';
 
-// Outbox for "your profile was updated" emails. Edits made in one sitting
-// collapse into a single pending notice per faculty member: `baseline` is the
-// profile before the first edit, `latest` the profile after the most recent
-// one. A failed send waits as "retry", so it never collides with the next
-// session's pending notice. Finished notices are kept for a year as the
-// field-level audit trail of profile edits.
 const profileUpdateNoticeSchema = new mongoose.Schema(
     {
         kerberos: { type: String, required: true },

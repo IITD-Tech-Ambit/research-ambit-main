@@ -1,13 +1,6 @@
-/**
- * Check the SMTP setup and preview the profile-update email.
- *
- *   npm run mail:test -- --verify            log in to SMTP only, send nothing
- *   npm run mail:test -- --preview out.html  render a sample email to a file
- *   npm run mail:test                        send a sample email
- *
- * The sample is always sent to MAIL_DEV_TO (default ch7221511@iitd.ac.in),
- * never to a faculty member, regardless of MAIL_PROD.
- */
+// Developer-only sample. The recipient is always MAIL_DEV_TO (see devRecipient).
+// This script does not look at MAIL_PROD and does not address a faculty member.
+// --preview writes HTML and does not connect. --verify checks the SMTP login only.
 import fs from 'fs';
 import dotenv from 'dotenv';
 import {

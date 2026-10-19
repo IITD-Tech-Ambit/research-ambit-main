@@ -145,7 +145,6 @@ directory.updateFacultyImage = asyncErrorHandler(async (req, res) => {
         return res.status(404).json({ success: false, message: `No faculty found for "${kerberos}".` });
     }
 
-    // Invalidate cached profiles/search/grouped so the new image shows at once.
     await cacheDelByPrefix(DIR_CACHE_PREFIX);
     await notifyProfileChange(req, kerberos, before, updated);
 

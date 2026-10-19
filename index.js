@@ -76,8 +76,6 @@ let grpcServer = null;
 let stopProfileMail = () => {};
 
 if (!process.env.VERCEL) {
-  // Notices are claimed atomically, so this is also safe with several containers;
-  // one sender per container just keeps SMTP connections to a minimum.
   if (isLeadWorker) stopProfileMail = startProfileUpdateWorker();
 
   app.listen(PORT, () => {
