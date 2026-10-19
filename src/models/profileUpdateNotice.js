@@ -10,6 +10,7 @@ const profileUpdateNoticeSchema = new mongoose.Schema(
     {
         kerberos: { type: String, required: true },
         name: { type: String, default: '' },
+        email: { type: String, default: '' },
         status: {
             type: String,
             enum: ['pending', 'sending', 'retry', 'sent', 'skipped', 'failed'],

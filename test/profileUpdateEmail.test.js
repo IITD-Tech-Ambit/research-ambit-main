@@ -83,10 +83,14 @@ test('only MAIL_PROD=true sends to the faculty address', () => {
         for (const value of [undefined, 'false', '1', 'TRUE', 'yes']) {
             if (value === undefined) delete process.env.MAIL_PROD;
             else process.env.MAIL_PROD = value;
-            assert.deepEqual(resolveRecipient('abc'), { to: 'ch7221511@iitd.ac.in', redirectedFrom: 'abc@iitd.ac.in' });
+            assert.deepEqual(resolveRecipient('abc', 'abc@chemical.iitd.ac.in'), { to: 'ch7221511@iitd.ac.in', redirectedFrom: 'abc@chemical.iitd.ac.in' });
         }
         process.env.MAIL_PROD = 'true';
-        assert.deepEqual(resolveRecipient('abc'), { to: 'abc@iitd.ac.in' });
+        assert.deepEqual(resolveRecipient('abc', 'ABC@chemical.iitd.ac.in'), { to: 'abc@chemical.iitd.ac.in' });
+        assert.deepEqual(resolveRecipient('abc', 'abc@iitd.ac.in'), { to: 'abc@iitd.ac.in' });
+        assert.deepEqual(resolveRecipient('abc', 'abc@gmail.com'), { to: 'abc@iitd.ac.in' });
+        assert.deepEqual(resolveRecipient('abc', 'abc@iitd.ac.in.evil.com'), { to: 'abc@iitd.ac.in' });
+        assert.deepEqual(resolveRecipient('abc', ''), { to: 'abc@iitd.ac.in' });
     } finally {
         if (saved.prod === undefined) delete process.env.MAIL_PROD; else process.env.MAIL_PROD = saved.prod;
         if (saved.dev !== undefined) process.env.MAIL_DEV_TO = saved.dev;

@@ -303,14 +303,15 @@ const sectionList = (titles) =>
 /**
  * @param {{ name: string, kerberos: string, sections: ReturnType<typeof describeProfileChanges>,
  *   actors: {kind: string}[], firstChangeAt: Date, lastChangeAt: Date, profileUrl: string,
- *   photoUrl?: string, replyTo?: string, sealSrc?: string, devRedirectedFrom?: string }} input
- *   photoUrl = the faculty's current photo; replyTo = the support address named in
+ *   facultyEmail?: string, photoUrl?: string, replyTo?: string, sealSrc?: string,
+ *   devRedirectedFrom?: string }} input
+ *   facultyEmail = the address the notice is for; photoUrl = the faculty's current photo; replyTo = the support address named in
  *   the email; sealSrc = image source for the IIT Delhi seal (defaults to the
  *   inline attachment); devRedirectedFrom = the real recipient, when the mail is
  *   being redirected to the dev inbox instead.
  */
 export const buildProfileUpdateEmail = ({
-    name, kerberos, sections, actors, firstChangeAt, lastChangeAt, profileUrl, photoUrl,
+    name, kerberos, sections, actors, firstChangeAt, lastChangeAt, profileUrl, facultyEmail, photoUrl,
     replyTo = replyToAddress(), sealSrc = `cid:${SEAL_CID}`, devRedirectedFrom,
 }) => {
     const displayName = name || kerberos;
@@ -410,7 +411,7 @@ export const buildProfileUpdateEmail = ({
                   <td width="56" valign="middle" style="padding:16px 0 16px 16px;width:56px;">${avatar}</td>
                   <td valign="middle" style="padding:16px;font-family:${FONT};${WRAP}">
                     <p style="margin:0;font-size:15px;line-height:20px;font-weight:600;color:${C.ink};">${escapeHtml(displayName)}</p>
-                    <p style="margin:2px 0 8px;font-size:13px;line-height:18px;color:${C.muted};">${escapeHtml(kerberos)}@iitd.ac.in &middot; ${changeCount} ${changeCount === 1 ? 'change' : 'changes'} in ${sections.length} ${sections.length === 1 ? 'section' : 'sections'}</p>
+                    <p style="margin:2px 0 8px;font-size:13px;line-height:18px;color:${C.muted};">${escapeHtml(facultyEmail || `${kerberos}@iitd.ac.in`)} &middot; ${changeCount} ${changeCount === 1 ? 'change' : 'changes'} in ${sections.length} ${sections.length === 1 ? 'section' : 'sections'}</p>
                     <span style="display:inline-block;background:#ffffff;border:1px solid ${C.line};border-radius:999px;padding:3px 10px;font-size:12px;line-height:16px;font-weight:600;color:${C.body};">&#9679;&nbsp; ${escapeHtml(actorBadge(actors))}</span>
                   </td>
                 </tr>

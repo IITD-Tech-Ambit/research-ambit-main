@@ -35,11 +35,20 @@ const siteUrl = () => (process.env.SITE_URL || 'https://researchambit.iitd.ac.in
 export const profileUpdateEmailsEnabled = () =>
     isMailConfigured() && process.env.PROFILE_UPDATE_EMAILS !== 'false';
 
-export const facultyAddress = (kerberos) => `${kerberos}@iitd.ac.in`;
+const IITD_EMAIL_RE = /^[^\s@]+@([a-z0-9-]+\.)*iitd\.ac\.in$/i;
 
-/** Where a notice for `kerberos` goes: the faculty only when MAIL_PROD=true. */
-export const resolveRecipient = (kerberos) =>
-    isMailProd() ? { to: facultyAddress(kerberos) } : { to: devRecipient(), redirectedFrom: facultyAddress(kerberos) };
+/** The faculty member's directory email (department addresses included), or
+ * <kerberos>@iitd.ac.in when it is missing or outside IIT Delhi. */
+export const facultyAddress = (kerberos, directoryEmail) => {
+    const email = String(directoryEmail || '').trim().toLowerCase();
+    return IITD_EMAIL_RE.test(email) ? email : `${kerberos}@iitd.ac.in`;
+};
+
+/** Where a notice goes: the faculty member only when MAIL_PROD=true. */
+export const resolveRecipient = (kerberos, directoryEmail) => {
+    const address = facultyAddress(kerberos, directoryEmail);
+    return isMailProd() ? { to: address } : { to: devRecipient(), redirectedFrom: address };
+};
 
 /** Who made the edit: the faculty themself, or a superadmin acting for them. */
 export const actorFromRequest = (req, kerberos) => {
@@ -68,6 +77,7 @@ export const recordProfileChange = async ({ kerberos, before, after, actor }) =>
         {
             $set: {
                 name: { $literal: facultyDisplayName(after) },
+                email: { $literal: String(after.email || '') },
                 baseline: { $ifNull: ['$baseline', { $literal: baseline }] },
                 latest: { $literal: latest },
                 actors: { $setUnion: [{ $ifNull: ['$actors', []] }, [{ $literal: actor }]] },
@@ -127,10 +137,11 @@ export const deliverNotice = async (notice) => {
         return 'failed';
     }
 
-    const { to, redirectedFrom } = resolveRecipient(notice.kerberos);
+    const { to, redirectedFrom } = resolveRecipient(notice.kerberos, notice.email);
     const email = buildProfileUpdateEmail({
         name: notice.name,
         kerberos: notice.kerberos,
+        facultyEmail: facultyAddress(notice.kerberos, notice.email),
         sections,
         actors: notice.actors,
         firstChangeAt: notice.firstChangeAt,
