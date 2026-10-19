@@ -13,7 +13,7 @@ import dotenv from 'dotenv';
 import {
     closeTransporter, devRecipient, fromHeader, getTransporter, isMailConfigured, senderAddress,
 } from '../lib/mailTransport.js';
-import { buildProfileUpdateEmail, describeProfileChanges } from '../services/profileUpdateEmail.js';
+import { buildProfileUpdateEmail, describeProfileChanges, sealAttachment } from '../services/profileUpdateEmail.js';
 
 dotenv.config({ quiet: true });
 
@@ -22,6 +22,7 @@ const previewPath = args.includes('--preview') ? args[args.indexOf('--preview') 
 
 const before = {
     title: 'Prof.', firstName: 'Sample', lastName: 'Faculty',
+    profile_image_url: 'https://res.cloudinary.com/demo/image/upload/lady.jpg',
     metric_visibility: { h_index: true, citations: true },
     background: 'Works on catalysis.',
     background_visible: false,
@@ -31,7 +32,7 @@ const before = {
 };
 const after = {
     ...before,
-    profile_image_url: 'https://res.cloudinary.com/demo/image/upload/sample.jpg',
+    profile_image_url: 'https://res.cloudinary.com/demo/image/upload/woman.jpg',
     metric_visibility: { h_index: false, citations: true },
     background: 'Works on heterogeneous catalysis and reaction engineering, with a focus on sustainable fuels and green chemical processes for industry.',
     background_visible: true,
@@ -43,7 +44,7 @@ const after = {
 };
 
 const now = Date.now();
-const email = buildProfileUpdateEmail({
+const render = (sealSrc) => buildProfileUpdateEmail({
     name: 'Prof. Sample Faculty',
     kerberos: 'samplefac',
     sections: describeProfileChanges(before, after),
@@ -51,11 +52,15 @@ const email = buildProfileUpdateEmail({
     firstChangeAt: new Date(now - 7 * 60_000),
     lastChangeAt: new Date(now),
     profileUrl: 'https://researchambit.iitd.ac.in/faculty/samplefac',
+    photoUrl: after.profile_image_url,
     devRedirectedFrom: 'samplefac@iitd.ac.in',
+    ...(sealSrc ? { sealSrc } : {}),
 });
+const email = render();
 
 if (previewPath) {
-    fs.writeFileSync(previewPath, email.html);
+    const seal = fs.readFileSync(sealAttachment().path).toString('base64');
+    fs.writeFileSync(previewPath, render(`data:image/png;base64,${seal}`).html);
     console.log(email.text);
     console.log(`\nHTML preview written to ${previewPath}`);
     process.exit(0);
@@ -78,6 +83,7 @@ try {
             subject: `[TEST] ${email.subject}`,
             text: email.text,
             html: email.html,
+            attachments: email.attachments,
         });
         console.log(`Sample sent to ${devRecipient()} (message id ${info.messageId})`);
     }

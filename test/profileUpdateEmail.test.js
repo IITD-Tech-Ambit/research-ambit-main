@@ -38,15 +38,17 @@ test('describes every kind of change by section', () => {
     };
     const sections = Object.fromEntries(describeProfileChanges(base, after).map((s) => [s.title, s]));
 
+    const types = (title) => sections[title].changes.map((c) => c.type);
+
     assert.equal(sections['Profile photo'].imageUrl, 'https://cdn.example.org/new.jpg');
-    assert.deepEqual(sections['Research metrics'].items, ['H-index: now hidden from your public profile.']);
+    assert.deepEqual(types('Research metrics'), ['hidden']);
     assert.equal(sections.Background.quote, 'New text about research');
-    assert.ok(sections.Background.items.includes('Section is now shown on your public profile.'));
-    assert.deepEqual(sections.Qualifications.items, ['Added: Ph.D.']);
-    assert.deepEqual(sections['Contact number'].items, ['Removed (was: 123)']);
-    assert.deepEqual(sections['External links'].items, [
-        'Renamed: "Lab" to "Group" (https://lab.example.org)',
-        'Added: Scholar (https://scholar.example.org)',
+    assert.deepEqual(types('Background'), ['shown', 'updated']);
+    assert.deepEqual(sections.Qualifications.changes, [{ type: 'added', text: 'Ph.D.' }]);
+    assert.deepEqual(sections['Contact number'].changes, [{ type: 'removed', text: '123' }]);
+    assert.deepEqual(sections['External links'].changes.map((c) => [c.type, c.from, c.to]), [
+        ['changed', 'Lab', 'Group'],
+        ['added', undefined, undefined],
     ]);
 });
 
@@ -90,5 +92,8 @@ test('email escapes faculty-entered text and marks dev redirects', () => {
     assert.ok(!email.html.includes('<script>'));
     assert.ok(email.html.includes('&lt;script&gt;'));
     assert.equal(email.subject, '[DEV → abc@iitd.ac.in] Your Research Ambit profile was updated');
+    assert.match(email.text, /Added: <script>x<\/script>/);
     assert.match(email.text, /just reply to this email/i);
+    assert.ok(email.html.includes('cid:iitd-seal@researchambit'));
+    assert.ok(email.attachments[0].path.endsWith('assets/email/iitd-seal.png'));
 });

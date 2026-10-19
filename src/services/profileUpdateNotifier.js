@@ -136,6 +136,7 @@ export const deliverNotice = async (notice) => {
         firstChangeAt: notice.firstChangeAt,
         lastChangeAt: notice.lastChangeAt,
         profileUrl: `${siteUrl()}/faculty/${encodeURIComponent(notice.kerberos)}`,
+        photoUrl: notice.latest?.profile_image_url,
         devRedirectedFrom: redirectedFrom,
     });
 
@@ -147,6 +148,7 @@ export const deliverNotice = async (notice) => {
             subject: email.subject,
             text: email.text,
             html: email.html,
+            attachments: email.attachments,
             headers: { 'Auto-Submitted': 'auto-generated' },
         });
         await finish(notice._id, { status: 'sent', sentAt: new Date(), recipient: to, messageId: info?.messageId, lastError: null });
