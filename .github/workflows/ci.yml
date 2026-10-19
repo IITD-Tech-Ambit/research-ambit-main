@@ -19,16 +19,16 @@ jobs:
 
       - run: npm ci
 
-      # `npm test` here is currently a stub that always fails, and prettier
-      # (`npm run lint`) has ~38 pre-existing formatting violations unrelated
-      # to any given change — neither is usable as a real gate yet. This
+      # Prettier (`npm run lint`) has ~38 pre-existing formatting violations
+      # unrelated to any given change, so it is not a gate yet. This
       # syntax-checks every source file instead, which reliably reflects
       # actual breakage (import errors, typos) without being blocked by
-      # existing formatting debt. Swap this for `npm test`/lint once a real
-      # test suite and a repo-wide prettier pass exist.
+      # existing formatting debt.
       - name: Syntax check all source files
         run: |
           set -e
           for f in $(find src -name "*.js") index.js; do
             node --check "$f"
           done
+
+      - run: npm test
