@@ -52,6 +52,17 @@ test('describes every kind of change by section', () => {
     ]);
 });
 
+test('legacy http Cloudinary photos are shown over https', () => {
+    const url = 'http://res.cloudinary.com/demo/image/upload/v1/faculty_images/x.jpg';
+    const email = buildProfileUpdateEmail({
+        name: 'Prof. A B', kerberos: 'abc', sections: describeProfileChanges(base, { ...base, profile_image_url: url }),
+        actors: [{ kind: 'self' }], firstChangeAt: new Date(), lastChangeAt: new Date(),
+        profileUrl: 'https://researchambit.iitd.ac.in/faculty/abc', photoUrl: url,
+    });
+    assert.ok(email.html.includes('https://res.cloudinary.com/demo/image/upload/c_fill,g_face,w_176,h_176,q_auto,f_auto/v1/faculty_images/x.jpg'));
+    assert.ok(!email.html.includes('http://res.cloudinary.com'));
+});
+
 test('actor wording distinguishes self edits from team edits', () => {
     assert.match(describeActors([{ kind: 'self' }], 'abc'), /your IITD account \(abc\)/);
     assert.match(describeActors([{ kind: 'superadmin' }], 'abc'), /Research Ambit team on your behalf/);

@@ -203,12 +203,17 @@ const initialsOf = (name = '') => {
 };
 
 /** A small square, face-centred rendition for Cloudinary URLs; others unchanged. */
-const thumbnail = (url, size) =>
-    /^https:\/\/res\.cloudinary\.com\/[^/]+\/image\/upload\//.test(url)
-        ? url.replace('/image/upload/', `/image/upload/c_fill,g_face,w_${size * 2},h_${size * 2},q_auto,f_auto/`)
-        : url;
+// Older uploads stored Cloudinary's http:// URL; Cloudinary serves the same path over https.
+const toHttps = (url = '') => url.replace(/^http:\/\/res\.cloudinary\.com\//i, 'https://res.cloudinary.com/');
 
-const safeImage = (url) => /^https:\/\//i.test(url || '');
+const thumbnail = (url, size) => {
+    const secure = toHttps(url);
+    return /^https:\/\/res\.cloudinary\.com\/[^/]+\/image\/upload\//.test(secure)
+        ? secure.replace('/image/upload/', `/image/upload/c_fill,g_face,w_${size * 2},h_${size * 2},q_auto,f_auto/`)
+        : secure;
+};
+
+const safeImage = (url) => /^https:\/\//i.test(toHttps(url || ''));
 
 export const SEAL_CID = 'iitd-seal@researchambit';
 export const sealAttachment = () => ({
@@ -326,7 +331,7 @@ export const buildProfileUpdateEmail = ({
             s.title.toUpperCase(),
             ...s.changes.map((c) => `  - ${changeToText(c)}`),
             ...(s.quote ? [`    "${s.quote}"`] : []),
-            ...(s.imageUrl ? [`    New photo: ${s.imageUrl}`] : []),
+            ...(s.imageUrl ? [`    New photo: ${toHttps(s.imageUrl)}`] : []),
             '',
         ]),
         `View your profile: ${profileUrl}`,
