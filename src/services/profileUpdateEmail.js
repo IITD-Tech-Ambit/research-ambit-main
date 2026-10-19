@@ -223,6 +223,8 @@ const REPLY_TITLE = "Don't recognise these changes?";
 const REPLY_BODY = "If you didn't make them, or something on your profile looks wrong, just reply to this email and the Research Ambit team will look into it.";
 
 const FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif";
+// Long URLs and email addresses must wrap instead of widening the layout on phones.
+const WRAP = 'word-break:break-word;overflow-wrap:anywhere;';
 const C = {
     primary: '#1b54da', primaryDark: '#163fa8', accent: '#22c3be', ink: '#0f172a', body: '#334155',
     muted: '#64748b', faint: '#94a3b8', line: '#e2e8f0', canvas: '#eef2f8', card: '#ffffff', soft: '#f8fafc',
@@ -253,8 +255,8 @@ const changeRowHtml = (c) => {
     }
     return `
                     <tr>
-                      <td valign="top" width="86" style="width:86px;padding:5px 0;">${chip(c.type)}</td>
-                      <td valign="top" style="padding:5px 0 5px 4px;font-family:${FONT};font-size:14px;line-height:22px;color:${C.body};">${body}</td>
+                      <td class="chip-col" valign="top" width="86" style="width:86px;padding:5px 0;">${chip(c.type)}</td>
+                      <td valign="top" style="padding:5px 0 5px 4px;font-family:${FONT};font-size:14px;line-height:22px;color:${C.body};${WRAP}">${body}</td>
                     </tr>`;
 };
 
@@ -284,7 +286,7 @@ const sectionHtml = (s, isLast) => `
                 </table>
                 ${s.quote ? `
                 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:10px;">
-                  <tr><td style="background:${C.soft};border-left:3px solid ${C.accent};border-radius:6px;padding:12px 16px;font-family:Georgia,'Times New Roman',serif;font-size:14px;line-height:23px;color:${C.body};font-style:italic;">&ldquo;${escapeHtml(s.quote)}&rdquo;</td></tr>
+                  <tr><td style="background:${C.soft};border-left:3px solid ${C.accent};border-radius:6px;padding:12px 16px;font-family:Georgia,'Times New Roman',serif;font-size:14px;line-height:23px;color:${C.body};font-style:italic;${WRAP}">&ldquo;${escapeHtml(s.quote)}&rdquo;</td></tr>
                 </table>` : ''}
               </td>
             </tr>`;
@@ -347,9 +349,14 @@ export const buildProfileUpdateEmail = ({
   <title>${escapeHtml(SUBJECT)}</title>
   <style>
     @media only screen and (max-width: 620px) {
-      .container { width: 100% !important; }
-      .px { padding-left: 22px !important; padding-right: 22px !important; }
-      .hero-title { font-size: 24px !important; line-height: 30px !important; }
+      .outer { padding: 16px 8px 28px !important; }
+      .card { border-radius: 14px !important; }
+      .px { padding-left: 20px !important; padding-right: 20px !important; }
+      .hero { padding-top: 26px !important; }
+      .hero-title { font-size: 23px !important; line-height: 29px !important; }
+      .chip-col { width: 74px !important; }
+      .btn-table { width: 100% !important; }
+      .btn-link { display: block !important; text-align: center !important; }
     }
     a { color: ${C.primary}; }
   </style>
@@ -357,12 +364,13 @@ export const buildProfileUpdateEmail = ({
 <body style="margin:0;padding:0;background:${C.canvas};-webkit-text-size-adjust:100%;">
   <div style="display:none;max-height:0;overflow:hidden;opacity:0;mso-hide:all;">${escapeHtml(preheader)}&#8199;&#65279;&#847; &#8199;&#65279;&#847; &#8199;&#65279;&#847; &#8199;&#65279;&#847;</div>
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="${C.canvas}" style="background:${C.canvas};">
-    <tr><td align="center" style="padding:32px 12px 40px;">
-      <table role="presentation" class="container" width="600" cellpadding="0" cellspacing="0" border="0" style="width:600px;max-width:600px;">
+    <tr><td class="outer" align="center" style="padding:32px 12px 40px;">
+      <!--[if mso]><table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" align="center"><tr><td><![endif]-->
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:600px;margin:0 auto;">
         ${devRedirectedFrom ? `
         <tr><td style="padding:0 0 14px;">
           <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
-            <td style="background:#fffbeb;border:1px dashed #f59e0b;border-radius:10px;padding:10px 16px;font-family:${FONT};font-size:13px;line-height:19px;color:#92400e;">
+            <td style="background:#fffbeb;border:1px dashed #f59e0b;border-radius:10px;padding:10px 16px;font-family:${FONT};font-size:13px;line-height:19px;color:#92400e;${WRAP}">
               <strong>Dev preview</strong> &middot; in production this goes to <strong>${escapeHtml(devRedirectedFrom)}</strong>
             </td>
           </tr></table>
@@ -378,11 +386,11 @@ export const buildProfileUpdateEmail = ({
           </tr></table>
         </td></tr>
 
-        <tr><td style="background:${C.card};border-radius:18px;box-shadow:0 10px 30px rgba(15,23,42,0.08);overflow:hidden;">
+        <tr><td class="card" style="background:${C.card};border-radius:18px;box-shadow:0 10px 30px rgba(15,23,42,0.08);overflow:hidden;">
           <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
             <tr><td height="5" bgcolor="${C.primary}" style="height:5px;line-height:5px;font-size:0;background:${C.primary};background-image:linear-gradient(90deg,${C.primary},${C.accent});border-radius:18px 18px 0 0;">&nbsp;</td></tr>
 
-            <tr><td class="px" style="padding:34px 40px 8px;font-family:${FONT};">
+            <tr><td class="px hero" style="padding:34px 40px 8px;font-family:${FONT};">
               <p style="margin:0 0 10px;font-size:12px;line-height:16px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:${C.accent};">Profile update</p>
               <h1 class="hero-title" style="margin:0;font-size:27px;line-height:34px;font-weight:700;color:${C.ink};letter-spacing:-0.4px;">Your profile was updated</h1>
               <p style="margin:12px 0 0;font-size:15px;line-height:24px;color:${C.body};">Dear ${escapeHtml(displayName)}, here&rsquo;s a summary of the changes made to your faculty profile ${escapeHtml(when)}.</p>
@@ -392,7 +400,7 @@ export const buildProfileUpdateEmail = ({
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:${C.soft};border:1px solid ${C.line};border-radius:14px;">
                 <tr>
                   <td width="56" valign="middle" style="padding:16px 0 16px 16px;width:56px;">${avatar}</td>
-                  <td valign="middle" style="padding:16px;font-family:${FONT};">
+                  <td valign="middle" style="padding:16px;font-family:${FONT};${WRAP}">
                     <p style="margin:0;font-size:15px;line-height:20px;font-weight:600;color:${C.ink};">${escapeHtml(displayName)}</p>
                     <p style="margin:2px 0 8px;font-size:13px;line-height:18px;color:${C.muted};">${escapeHtml(kerberos)}@iitd.ac.in &middot; ${changeCount} ${changeCount === 1 ? 'change' : 'changes'} in ${sections.length} ${sections.length === 1 ? 'section' : 'sections'}</p>
                     <span style="display:inline-block;background:#ffffff;border:1px solid ${C.line};border-radius:999px;padding:3px 10px;font-size:12px;line-height:16px;font-weight:600;color:${C.body};">&#9679;&nbsp; ${escapeHtml(actorBadge(actors))}</span>
@@ -407,9 +415,9 @@ export const buildProfileUpdateEmail = ({
             </td></tr>
 
             <tr><td class="px" align="left" style="padding:8px 40px 30px;">
-              <table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>
-                <td bgcolor="${C.primary}" style="border-radius:10px;background:${C.primary};">
-                  <a href="${escapeHtml(profileUrl)}" target="_blank" style="display:inline-block;padding:13px 26px;font-family:${FONT};font-size:15px;line-height:20px;font-weight:600;color:#ffffff;text-decoration:none;border-radius:10px;">View your profile &rarr;</a>
+              <table role="presentation" class="btn-table" cellpadding="0" cellspacing="0" border="0"><tr>
+                <td align="center" bgcolor="${C.primary}" style="border-radius:10px;background:${C.primary};">
+                  <a class="btn-link" href="${escapeHtml(profileUrl)}" target="_blank" style="display:inline-block;padding:13px 26px;font-family:${FONT};font-size:15px;line-height:20px;font-weight:600;color:#ffffff;text-decoration:none;border-radius:10px;">View your profile &rarr;</a>
                 </td>
               </tr></table>
             </td></tr>
@@ -432,6 +440,7 @@ export const buildProfileUpdateEmail = ({
           <p style="margin:0;font-size:12px;line-height:18px;color:${C.faint};">This is an automated notice, sent whenever your faculty profile on Research Ambit changes.</p>
         </td></tr>
       </table>
+      <!--[if mso]></td></tr></table><![endif]-->
     </td></tr>
   </table>
 </body>

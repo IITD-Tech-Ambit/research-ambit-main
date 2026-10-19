@@ -40,7 +40,11 @@ const after = {
     qualifications_visible: true,
     phone: '+91 11 2659 0000',
     phone_visible: true,
-    external_links: [{ label: 'Research group', url: 'https://example.org/lab' }],
+    additional_emails: ['sample.faculty.secondary.address@chemical.iitd.ac.in'],
+    external_links: [
+        { label: 'Research group', url: 'https://example.org/lab' },
+        { label: 'Google Scholar', url: 'https://scholar.google.com/citations?user=AbCdEfGhIjKlMnOp&hl=en&oi=ao' },
+    ],
 };
 
 const now = Date.now();
