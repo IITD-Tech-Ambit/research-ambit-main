@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
     buildProfileUpdateEmail, describeActors, describeProfileChanges, snapshotProfile, snapshotsEqual,
 } from '../src/services/profileUpdateEmail.js';
-import { actorFromRequest, guardRecipient, resolveRecipient } from '../src/services/profileUpdateNotifier.js';
+import { actorFromRequest, guardRecipient, isSuperadminEdit, isSuperadminOnlyNotice, resolveRecipient } from '../src/services/profileUpdateNotifier.js';
 import { smtpServer } from '../src/lib/mailTransport.js';
 import { suggestionRecipient } from '../src/utils/mailer.js';
 
@@ -76,6 +76,14 @@ test('actorFromRequest treats a superadmin editing their own profile as self', (
     assert.deepEqual(actorFromRequest(req('abc', 'user'), 'abc'), { kind: 'self', id: 'abc' });
     assert.deepEqual(actorFromRequest(req('admin1', 'superadmin'), 'abc'), { kind: 'superadmin', id: 'admin1' });
     assert.deepEqual(actorFromRequest(req('abc', 'superadmin'), 'abc'), { kind: 'self', id: 'abc' });
+});
+
+test('a superadmin editing someone else does not send a profile email', () => {
+    assert.equal(isSuperadminEdit({ kind: 'superadmin', id: 'admin1' }), true);
+    assert.equal(isSuperadminEdit({ kind: 'self', id: 'abc' }), false);
+    assert.equal(isSuperadminOnlyNotice([{ kind: 'superadmin', id: 'admin1' }]), true);
+    assert.equal(isSuperadminOnlyNotice([{ kind: 'self', id: 'abc' }, { kind: 'superadmin', id: 'admin1' }]), false);
+    assert.equal(isSuperadminOnlyNotice([]), false);
 });
 
 test('only MAIL_PROD=true sends to the faculty address', () => {

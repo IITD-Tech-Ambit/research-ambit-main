@@ -4,10 +4,10 @@ import directory from "../controllers/directoryController.js";
 const router = e.Router();
 
 // Profile-image uploads land in a temp dir; cloudinary upload + unlink happen in
-// the controller. Cap at 5 MB and accept images only.
+// the controller. Cap at 8 MB and accept images only.
 const uploadImage = multer({
     dest: "/tmp/",
-    limits: { fileSize: 5 * 1024 * 1024 },
+    limits: { fileSize: 8 * 1024 * 1024 },
     fileFilter: (_req, file, cb) => cb(null, /^image\//.test(file.mimetype)),
 });
 

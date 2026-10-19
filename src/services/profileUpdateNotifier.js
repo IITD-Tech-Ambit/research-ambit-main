@@ -1,13 +1,3 @@
-/**
- * Queues and sends "your profile was updated" emails.
- *
- * Every successful profile write records a before/after snapshot into one
- * pending notice per faculty member. The notice is sent once the profile has
- * been quiet for PROFILE_MAIL_QUIET_MINUTES (but no later than
- * PROFILE_MAIL_MAX_WAIT_MINUTES after the first edit), so one editing session
- * produces one email. Notices live in MongoDB, so restarts lose nothing, and
- * are claimed atomically, so several backend instances never double-send.
- */
 import ProfileUpdateNotice from '../models/profileUpdateNotice.js';
 import {
     devRecipient, fromHeader, getTransporter, isMailConfigured, isMailProd, replyToAddress,
@@ -32,44 +22,32 @@ const KERBEROS_RE = /^[a-z0-9][a-z0-9._-]*$/;
 
 const siteUrl = () => (process.env.SITE_URL || 'https://researchambit.iitd.ac.in').replace(/\/+$/, '');
 
-export const profileUpdateEmailsEnabled = () =>
+const profileUpdateEmailsEnabled = () =>
     isMailConfigured() && process.env.PROFILE_UPDATE_EMAILS !== 'false';
 
 const IITD_EMAIL_RE = /^[^\s@]+@([a-z0-9-]+\.)*iitd\.ac\.in$/i;
 
-/** The faculty member's directory email (department addresses included), or
- * <kerberos>@iitd.ac.in when it is missing or outside IIT Delhi. */
-export const facultyAddress = (kerberos, directoryEmail) => {
+const facultyAddress = (kerberos, directoryEmail) => {
     const email = String(directoryEmail || '').trim().toLowerCase();
     return IITD_EMAIL_RE.test(email) ? email : `${kerberos}@iitd.ac.in`;
 };
 
-/** Where a notice goes: the faculty member only when MAIL_PROD=true. */
 export const resolveRecipient = (kerberos, directoryEmail) => {
     const address = facultyAddress(kerberos, directoryEmail);
     return isMailProd() ? { to: address } : { to: devRecipient(), redirectedFrom: address };
 };
 
-export class UndeliverableRecipientError extends Error {}
-
-/** Last line of defence before an SMTP send. MAIL_PROD must be exactly "true"
- * to reach anyone but the dev inbox, and that address must belong to IIT Delhi. */
 export const guardRecipient = (to) => {
     const dest = String(to || '').trim().toLowerCase();
     if (!isMailProd()) {
         const dev = devRecipient().trim().toLowerCase();
-        if (dest !== dev) {
-            throw new UndeliverableRecipientError(`Refusing to email ${dest || '(nobody)'} while MAIL_PROD is not true`);
-        }
+        if (dest !== dev) throw new Error(`Refusing to email ${dest || '(nobody)'} while MAIL_PROD is not true`);
         return dest;
     }
-    if (!IITD_EMAIL_RE.test(dest)) {
-        throw new UndeliverableRecipientError(`Refusing to email ${dest || '(nobody)'}: not an IIT Delhi address`);
-    }
+    if (!IITD_EMAIL_RE.test(dest)) throw new Error(`Refusing to email ${dest || '(nobody)'}: not an IIT Delhi address`);
     return dest;
 };
 
-/** Who made the edit: the faculty themself, or a superadmin acting for them. */
 export const actorFromRequest = (req, kerberos) => {
     const authKerberos = String(req.headers['x-user-kerberos'] || '').toLowerCase();
     if (req.headers['x-user-role'] === 'superadmin' && authKerberos !== kerberos) {
@@ -78,23 +56,21 @@ export const actorFromRequest = (req, kerberos) => {
     return { kind: 'self', id: kerberos };
 };
 
-/**
- * Record one successful profile write. Never throws: a notification problem
- * must not fail an edit that has already been saved.
- */
+// Mail only when the faculty member edited their own profile. A superadmin
+// editing someone else does not queue a notice and does not revise one that
+// is already waiting, so the letter describes only the faculty member's edits.
+export const isSuperadminEdit = (actor) => actor?.kind === 'superadmin';
+
+export const isSuperadminOnlyNotice = (actors = []) =>
+    actors.length > 0 && actors.every((actor) => actor?.kind === 'superadmin');
+
 export const recordProfileChange = async ({ kerberos, before, after, actor }) => {
-    if (!profileUpdateEmailsEnabled() || !before || !after) return;
+    if (!profileUpdateEmailsEnabled() || !before || !after || isSuperadminEdit(actor)) return;
     const baseline = snapshotProfile(before);
     const latest = snapshotProfile(after);
-    // A save that changed nothing must not open a new notice. It still has to
-    // update one that is already waiting: a concurrent save may have queued a
-    // diff that this write just undid, and the email must match the stored profile.
     const unchanged = snapshotsEqual(baseline, latest);
 
     const now = new Date();
-    // Pipeline update so baseline/firstChangeAt are kept from the first edit of
-    // the session while sendAfter slides forward. $literal stops user text that
-    // starts with "$" from being read as a field path.
     const pipeline = [
         {
             $set: {
@@ -124,7 +100,6 @@ export const recordProfileChange = async ({ kerberos, before, after, actor }) =>
             );
             return;
         } catch (err) {
-            // Two concurrent first edits can race on the upsert; the retry matches the winner.
             if (err?.code === 11000 && attempt === 0) continue;
             console.error(`[ProfileMail] failed to queue notice for ${kerberos}:`, err?.message || err);
             return;
@@ -150,7 +125,11 @@ const finish = (id, fields) =>
         { $set: { ...fields, expireAt: new Date(Date.now() + RETENTION_MS) }, $unset: { leaseUntil: 1 } },
     );
 
-export const deliverNotice = async (notice) => {
+const deliverNotice = async (notice) => {
+    if (isSuperadminOnlyNotice(notice.actors)) {
+        await finish(notice._id, { status: 'skipped' });
+        return 'skipped';
+    }
     const sections = describeProfileChanges(notice.baseline, notice.latest);
     if (sections.length === 0) {
         await finish(notice._id, { status: 'skipped' });
@@ -217,7 +196,7 @@ export const deliverNotice = async (notice) => {
 let ticking = false;
 let stopRequested = false;
 
-export const runProfileMailTick = async () => {
+const runProfileMailTick = async () => {
     if (ticking || stopRequested) return;
     ticking = true;
     try {
@@ -233,7 +212,6 @@ export const runProfileMailTick = async () => {
     }
 };
 
-/** Start the background sender. Returns a stop function. */
 export const startProfileUpdateWorker = () => {
     if (!profileUpdateEmailsEnabled()) {
         console.info('[ProfileMail] disabled (SMTP not configured or PROFILE_UPDATE_EMAILS=false)');
@@ -246,8 +224,6 @@ export const startProfileUpdateWorker = () => {
     interval.unref();
     const first = setTimeout(runProfileMailTick, 10_000);
     first.unref();
-    // Wait for a send that is already in flight so a restart can't leave it
-    // claimed but unfinished (the lease would otherwise resend it).
     return async () => {
         stopRequested = true;
         clearInterval(interval);
