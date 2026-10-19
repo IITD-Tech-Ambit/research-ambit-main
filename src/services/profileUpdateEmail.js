@@ -1,10 +1,10 @@
 /**
  * Pure helpers for the "your profile was updated" email: snapshot the
  * faculty-editable fields, describe what changed between two snapshots, and
- * render the email. No I/O apart from resolving the seal asset path, so it is
- * unit-tested directly.
+ * render the email. No I/O, so it is unit-tested directly.
  */
 import { fileURLToPath } from 'url';
+import { replyToAddress } from '../lib/mailTransport.js';
 
 const METRICS = [
     ['h_index', 'H-index'],
@@ -220,7 +220,8 @@ export const sealAttachment = () => ({
 
 const SUBJECT = 'Your Research Ambit profile was updated';
 const REPLY_TITLE = "Don't recognise these changes?";
-const REPLY_BODY = "If you didn't make them, or something on your profile looks wrong, just reply to this email and the Research Ambit team will look into it.";
+const replyBody = (address) =>
+    `If you didn't make them, or something on your profile looks wrong, just reply to this email or write to ${address}, and the Research Ambit team will look into it.`;
 
 const FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif";
 // Long URLs and email addresses must wrap instead of widening the layout on phones.
@@ -297,13 +298,15 @@ const sectionList = (titles) =>
 /**
  * @param {{ name: string, kerberos: string, sections: ReturnType<typeof describeProfileChanges>,
  *   actors: {kind: string}[], firstChangeAt: Date, lastChangeAt: Date, profileUrl: string,
- *   photoUrl?: string, sealSrc?: string, devRedirectedFrom?: string }} input
- *   photoUrl = the faculty's current photo; sealSrc = image source for the IIT Delhi
- *   seal (defaults to the inline attachment); devRedirectedFrom = the real
- *   recipient, when the mail is being redirected to the dev inbox instead.
+ *   photoUrl?: string, replyTo?: string, sealSrc?: string, devRedirectedFrom?: string }} input
+ *   photoUrl = the faculty's current photo; replyTo = the support address named in
+ *   the email; sealSrc = image source for the IIT Delhi seal (defaults to the
+ *   inline attachment); devRedirectedFrom = the real recipient, when the mail is
+ *   being redirected to the dev inbox instead.
  */
 export const buildProfileUpdateEmail = ({
-    name, kerberos, sections, actors, firstChangeAt, lastChangeAt, profileUrl, photoUrl, sealSrc = `cid:${SEAL_CID}`, devRedirectedFrom,
+    name, kerberos, sections, actors, firstChangeAt, lastChangeAt, profileUrl, photoUrl,
+    replyTo = replyToAddress(), sealSrc = `cid:${SEAL_CID}`, devRedirectedFrom,
 }) => {
     const displayName = name || kerberos;
     const when = describeWhen(firstChangeAt, lastChangeAt);
@@ -328,7 +331,7 @@ export const buildProfileUpdateEmail = ({
         ]),
         `View your profile: ${profileUrl}`,
         '',
-        `${REPLY_TITLE} ${REPLY_BODY}`,
+        `${REPLY_TITLE} ${replyBody(replyTo)}`,
         '',
         '—',
         'Research Ambit · Indian Institute of Technology Delhi',
@@ -426,7 +429,10 @@ export const buildProfileUpdateEmail = ({
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#fff7ed;border:1px solid #fed7aa;border-radius:14px;">
                 <tr><td style="padding:16px 18px;font-family:${FONT};">
                   <p style="margin:0 0 4px;font-size:14px;line-height:20px;font-weight:700;color:#9a3412;">${escapeHtml(REPLY_TITLE)}</p>
-                  <p style="margin:0;font-size:14px;line-height:22px;color:#9a3412;">${escapeHtml(REPLY_BODY)}</p>
+                  <p style="margin:0;font-size:14px;line-height:22px;color:#9a3412;${WRAP}">${escapeHtml(replyBody(replyTo)).replace(
+                      escapeHtml(replyTo),
+                      `<a href="mailto:${escapeHtml(replyTo)}?subject=${encodeURIComponent(`Profile update query (${kerberos})`)}" style="color:#9a3412;font-weight:600;text-decoration:underline;">${escapeHtml(replyTo)}</a>`,
+                  )}</p>
                 </td></tr>
               </table>
             </td></tr>

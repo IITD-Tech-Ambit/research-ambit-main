@@ -10,7 +10,7 @@
  */
 import ProfileUpdateNotice from '../models/profileUpdateNotice.js';
 import {
-    devRecipient, fromHeader, getTransporter, isMailConfigured, isMailProd, senderAddress,
+    devRecipient, fromHeader, getTransporter, isMailConfigured, isMailProd, replyToAddress,
 } from '../lib/mailTransport.js';
 import {
     buildProfileUpdateEmail, describeProfileChanges, facultyDisplayName, snapshotProfile, snapshotsEqual,
@@ -144,7 +144,7 @@ export const deliverNotice = async (notice) => {
         const info = await getTransporter().sendMail({
             from: fromHeader(),
             to,
-            replyTo: senderAddress(),
+            replyTo: replyToAddress(),
             subject: email.subject,
             text: email.text,
             html: email.html,

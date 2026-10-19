@@ -93,7 +93,8 @@ test('email escapes faculty-entered text and marks dev redirects', () => {
     assert.ok(email.html.includes('&lt;script&gt;'));
     assert.equal(email.subject, '[DEV → abc@iitd.ac.in] Your Research Ambit profile was updated');
     assert.match(email.text, /Added: <script>x<\/script>/);
-    assert.match(email.text, /just reply to this email/i);
+    assert.match(email.text, /just reply to this email or write to support\.rambit@iitd\.ac\.in/i);
+    assert.ok(email.html.includes('href="mailto:support.rambit@iitd.ac.in?subject=Profile%20update%20query%20(abc)"'));
     assert.ok(email.html.includes('cid:iitd-seal@researchambit'));
     assert.ok(email.attachments[0].path.endsWith('assets/email/iitd-seal.png'));
 });

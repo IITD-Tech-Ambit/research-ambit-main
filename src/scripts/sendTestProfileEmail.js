@@ -11,7 +11,7 @@
 import fs from 'fs';
 import dotenv from 'dotenv';
 import {
-    closeTransporter, devRecipient, fromHeader, getTransporter, isMailConfigured, senderAddress,
+    closeTransporter, devRecipient, fromHeader, getTransporter, isMailConfigured, replyToAddress,
 } from '../lib/mailTransport.js';
 import { buildProfileUpdateEmail, describeProfileChanges, sealAttachment } from '../services/profileUpdateEmail.js';
 
@@ -83,7 +83,7 @@ try {
         const info = await transporter.sendMail({
             from: fromHeader(),
             to: devRecipient(),
-            replyTo: senderAddress(),
+            replyTo: replyToAddress(),
             subject: `[TEST] ${email.subject}`,
             text: email.text,
             html: email.html,

@@ -1,6 +1,7 @@
 import nodemailer from 'nodemailer';
 
 const DEV_RECIPIENT = 'ch7221511@iitd.ac.in';
+const SUPPORT_ADDRESS = 'support.rambit@iitd.ac.in';
 
 let transporter = null;
 
@@ -19,6 +20,9 @@ export const senderAddress = () => {
     const user = process.env.MAIL_USER || '';
     return user.includes('@') ? user : `${user}@iitd.ac.in`;
 };
+
+/** Where faculty replies to automated notices go. */
+export const replyToAddress = () => process.env.MAIL_REPLY_TO || SUPPORT_ADDRESS;
 
 export const fromHeader = () =>
     `"${process.env.MAIL_FROM_NAME || 'Research Ambit, IIT Delhi'}" <${senderAddress()}>`;
