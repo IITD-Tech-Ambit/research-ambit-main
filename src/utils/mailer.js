@@ -1,16 +1,4 @@
-import nodemailer from 'nodemailer';
-
-const createTransporter = () =>
-    nodemailer.createTransport({
-        host: process.env.MAIL_HOST || 'smtp.gmail.com',
-        port: Number(process.env.MAIL_PORT) || 587,
-        secure: false, // true for port 465, false for 587 (STARTTLS)
-        auth: {
-            user: process.env.MAIL_USER,
-            pass: process.env.MAIL_PASS,
-        },
-        pool: false,
-    });
+import { fromHeader, getTransporter, isMailConfigured } from '../lib/mailTransport.js';
 
 /**
  * Send a suggestion notification email to the Research Ambit team.
@@ -19,12 +7,10 @@ const createTransporter = () =>
  */
 const sendSuggestionEmail = async (suggestion) => {
     // Skip silently if credentials are not configured
-    if (!process.env.MAIL_USER || !process.env.MAIL_PASS) {
-        console.warn('[Mailer] MAIL_USER or MAIL_PASS not set — skipping email notification.');
+    if (!isMailConfigured()) {
+        console.warn('[Mailer] MAIL_HOST, MAIL_USER or MAIL_PASS not set — skipping email notification.');
         return;
     }
-
-    const transporter = createTransporter();
 
     const replyTo = suggestion.email || undefined;
     const submittedBy = suggestion.name || 'Anonymous';
@@ -156,18 +142,14 @@ const sendSuggestionEmail = async (suggestion) => {
 </body>
 </html>`;
 
-    try {
-        await transporter.sendMail({
-            from: `"Research Ambit" <${process.env.MAIL_USER}>`,
-            to: process.env.MAIL_TO || 'researchambit@iitd.ac.in',
-            replyTo,
-            subject: `New Research Ambit Suggestion - ${suggestion.category}`,
-            text: textBody,
-            html,
-        });
-    } finally {
-        transporter.close();
-    }
+    await getTransporter().sendMail({
+        from: fromHeader(),
+        to: process.env.MAIL_TO || 'researchambit@iitd.ac.in',
+        replyTo,
+        subject: `New Research Ambit Suggestion - ${suggestion.category}`,
+        text: textBody,
+        html,
+    });
 };
 
 const escapeHtml = (str = '') =>

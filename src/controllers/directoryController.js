@@ -7,6 +7,7 @@ import { uploadToCloudinary } from "../lib/cloudinary.js";
 import { cacheDelByPrefix } from "../lib/cache.js";
 import { DIR_CACHE_PREFIX } from "../services/directoryCache.js";
 import { isFromGateway } from "../lib/gatewayIdentity.js";
+import { actorFromRequest, recordProfileChange } from "../services/profileUpdateNotifier.js";
 
 let directory = {};
 
@@ -30,6 +31,9 @@ const denyProfileEdit = (req, kerberos) => {
     if (authKerberos !== kerberos) return { status: 403, message: "You can only edit your own profile." };
     return null;
 };
+
+const notifyProfileChange = (req, kerberos, before, after) =>
+    recordProfileChange({ kerberos, before, after, actor: actorFromRequest(req, kerberos) });
 
 directory.getAllFaculties = asyncErrorHandler(async (req, res) => {
     const { data, message, cached } = await directoryService.listFaculty(req.query);
@@ -124,6 +128,12 @@ directory.updateFacultyImage = asyncErrorHandler(async (req, res) => {
         return res.status(400).json({ success: false, message: "No image file provided." });
     }
 
+    const before = await resolveFacultyByKerberos(kerberos);
+    if (!before) {
+        safeUnlink(req.file.path);
+        return res.status(404).json({ success: false, message: `No faculty found for "${kerberos}".` });
+    }
+
     // uploadToCloudinary unlinks the temp file on both success and failure.
     const url = await uploadToCloudinary(req.file.path, "faculty_images");
     if (!url) {
@@ -137,6 +147,7 @@ directory.updateFacultyImage = asyncErrorHandler(async (req, res) => {
 
     // Invalidate cached profiles/search/grouped so the new image shows at once.
     await cacheDelByPrefix(DIR_CACHE_PREFIX);
+    await notifyProfileChange(req, kerberos, before, updated);
 
     return successResponse(res, { profileImageUrl: url }, "Profile image updated.", 200);
 });
@@ -161,12 +172,14 @@ directory.updateFacultyVisibility = asyncErrorHandler(async (req, res) => {
         return res.status(400).json({ success: false, message: "No visibility flags provided." });
     }
 
-    const updated = await updateFacultyVisibilityByKerberos(kerberos, visibility);
+    const before = await resolveFacultyByKerberos(kerberos);
+    const updated = before && await updateFacultyVisibilityByKerberos(kerberos, visibility);
     if (!updated) {
         return res.status(404).json({ success: false, message: `No faculty found for "${kerberos}".` });
     }
 
     await cacheDelByPrefix(DIR_CACHE_PREFIX);
+    await notifyProfileChange(req, kerberos, before, updated);
 
     const v = updated.metric_visibility || {};
     return successResponse(res, {
@@ -396,6 +409,7 @@ directory.updateFacultyProfileExtras = asyncErrorHandler(async (req, res) => {
     }
 
     await cacheDelByPrefix(DIR_CACHE_PREFIX);
+    await notifyProfileChange(req, kerberos, existing, updated);
 
     return successResponse(res, profileExtrasPayload(updated), "Profile updated.", 200);
 });
