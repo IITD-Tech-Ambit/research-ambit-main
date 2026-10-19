@@ -2,20 +2,12 @@ import { devRecipient, fromHeader, getTransporter, isMailConfigured } from '../l
 
 const TEAM_INBOX = 'researchambit@iitd.ac.in';
 
-/** Production defaults to the team inbox. Anywhere else, an unset MAIL_TO goes
- * to the dev inbox so a laptop running the backend can't email the team. */
 export const suggestionRecipient = () => {
     if (process.env.MAIL_TO) return process.env.MAIL_TO;
     return process.env.NODE_ENV === 'production' ? TEAM_INBOX : devRecipient();
 };
 
-/**
- * Send a suggestion notification email to the Research Ambit team.
- * Returns silently if email credentials are not configured.
- * @param {{ name: string, email: string, category: string, message: string, createdAt: Date }} suggestion
- */
 const sendSuggestionEmail = async (suggestion) => {
-    // Skip silently if credentials are not configured
     if (!isMailConfigured()) {
         console.warn('[Mailer] MAIL_USER or MAIL_PASS not set — skipping email notification.');
         return;
