@@ -100,7 +100,7 @@ export default app;
 
 const shutdown = async (signal) => {
   console.log(`${signal} received. Shutting down gracefully...`);
-  stopProfileMail();
+  await stopProfileMail();
   closeTransporter();
   try {
     await stopGrpcServer(grpcServer);

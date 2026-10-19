@@ -3,8 +3,9 @@ import assert from 'node:assert/strict';
 import {
     buildProfileUpdateEmail, describeActors, describeProfileChanges, snapshotProfile, snapshotsEqual,
 } from '../src/services/profileUpdateEmail.js';
-import { actorFromRequest, resolveRecipient } from '../src/services/profileUpdateNotifier.js';
+import { actorFromRequest, guardRecipient, resolveRecipient } from '../src/services/profileUpdateNotifier.js';
 import { smtpServer } from '../src/lib/mailTransport.js';
+import { suggestionRecipient } from '../src/utils/mailer.js';
 
 const base = {
     title: 'Prof.', firstName: 'A', lastName: 'B',
@@ -95,6 +96,43 @@ test('only MAIL_PROD=true sends to the faculty address', () => {
     } finally {
         if (saved.prod === undefined) delete process.env.MAIL_PROD; else process.env.MAIL_PROD = saved.prod;
         if (saved.dev !== undefined) process.env.MAIL_DEV_TO = saved.dev;
+    }
+});
+
+test('nothing reaches a faculty address unless MAIL_PROD=true', () => {
+    const saved = { prod: process.env.MAIL_PROD, dev: process.env.MAIL_DEV_TO };
+    const restore = (k, v) => (v === undefined ? delete process.env[k] : (process.env[k] = v));
+    try {
+        delete process.env.MAIL_PROD;
+        delete process.env.MAIL_DEV_TO;
+        assert.equal(guardRecipient('ch7221511@iitd.ac.in'), 'ch7221511@iitd.ac.in');
+        assert.throws(() => guardRecipient('akshi@chemical.iitd.ac.in'), /MAIL_PROD/);
+        process.env.MAIL_PROD = 'true';
+        assert.equal(guardRecipient('Akshi@Chemical.iitd.ac.in'), 'akshi@chemical.iitd.ac.in');
+        assert.throws(() => guardRecipient('akshi@gmail.com'), /IIT Delhi/);
+        assert.throws(() => guardRecipient(''), /IIT Delhi/);
+    } finally {
+        restore('MAIL_PROD', saved.prod);
+        restore('MAIL_DEV_TO', saved.dev);
+    }
+});
+
+test('suggestion emails stay in the dev inbox outside production', () => {
+    const saved = { to: process.env.MAIL_TO, env: process.env.NODE_ENV, dev: process.env.MAIL_DEV_TO };
+    const restore = (k, v) => (v === undefined ? delete process.env[k] : (process.env[k] = v));
+    try {
+        delete process.env.MAIL_TO;
+        delete process.env.MAIL_DEV_TO;
+        process.env.NODE_ENV = 'development';
+        assert.equal(suggestionRecipient(), 'ch7221511@iitd.ac.in');
+        process.env.NODE_ENV = 'production';
+        assert.equal(suggestionRecipient(), 'researchambit@iitd.ac.in');
+        process.env.MAIL_TO = 'team@iitd.ac.in';
+        assert.equal(suggestionRecipient(), 'team@iitd.ac.in');
+    } finally {
+        restore('MAIL_TO', saved.to);
+        restore('NODE_ENV', saved.env);
+        restore('MAIL_DEV_TO', saved.dev);
     }
 });
 

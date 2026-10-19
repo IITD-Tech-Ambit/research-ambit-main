@@ -1,4 +1,13 @@
-import { fromHeader, getTransporter, isMailConfigured } from '../lib/mailTransport.js';
+import { devRecipient, fromHeader, getTransporter, isMailConfigured } from '../lib/mailTransport.js';
+
+const TEAM_INBOX = 'researchambit@iitd.ac.in';
+
+/** Production defaults to the team inbox. Anywhere else, an unset MAIL_TO goes
+ * to the dev inbox so a laptop running the backend can't email the team. */
+export const suggestionRecipient = () => {
+    if (process.env.MAIL_TO) return process.env.MAIL_TO;
+    return process.env.NODE_ENV === 'production' ? TEAM_INBOX : devRecipient();
+};
 
 /**
  * Send a suggestion notification email to the Research Ambit team.
@@ -142,11 +151,15 @@ const sendSuggestionEmail = async (suggestion) => {
 </body>
 </html>`;
 
+    const to = suggestionRecipient();
+    if (!process.env.MAIL_TO && process.env.NODE_ENV !== 'production') {
+        console.warn(`[Mailer] suggestion email redirected to ${to}; set MAIL_TO to use the team inbox`);
+    }
     await getTransporter().sendMail({
         from: fromHeader(),
-        to: process.env.MAIL_TO || 'researchambit@iitd.ac.in',
+        to,
         replyTo,
-        subject: `New Research Ambit Suggestion - ${suggestion.category}`,
+        subject: `New Research Ambit Suggestion - ${String(suggestion.category || 'General').replace(/[\r\n]+/g, ' ').slice(0, 80)}`,
         text: textBody,
         html,
     });

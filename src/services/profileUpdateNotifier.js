@@ -50,6 +50,25 @@ export const resolveRecipient = (kerberos, directoryEmail) => {
     return isMailProd() ? { to: address } : { to: devRecipient(), redirectedFrom: address };
 };
 
+export class UndeliverableRecipientError extends Error {}
+
+/** Last line of defence before an SMTP send. MAIL_PROD must be exactly "true"
+ * to reach anyone but the dev inbox, and that address must belong to IIT Delhi. */
+export const guardRecipient = (to) => {
+    const dest = String(to || '').trim().toLowerCase();
+    if (!isMailProd()) {
+        const dev = devRecipient().trim().toLowerCase();
+        if (dest !== dev) {
+            throw new UndeliverableRecipientError(`Refusing to email ${dest || '(nobody)'} while MAIL_PROD is not true`);
+        }
+        return dest;
+    }
+    if (!IITD_EMAIL_RE.test(dest)) {
+        throw new UndeliverableRecipientError(`Refusing to email ${dest || '(nobody)'}: not an IIT Delhi address`);
+    }
+    return dest;
+};
+
 /** Who made the edit: the faculty themself, or a superadmin acting for them. */
 export const actorFromRequest = (req, kerberos) => {
     const authKerberos = String(req.headers['x-user-kerberos'] || '').toLowerCase();
@@ -67,7 +86,10 @@ export const recordProfileChange = async ({ kerberos, before, after, actor }) =>
     if (!profileUpdateEmailsEnabled() || !before || !after) return;
     const baseline = snapshotProfile(before);
     const latest = snapshotProfile(after);
-    if (snapshotsEqual(baseline, latest)) return;
+    // A save that changed nothing must not open a new notice. It still has to
+    // update one that is already waiting: a concurrent save may have queued a
+    // diff that this write just undid, and the email must match the stored profile.
+    const unchanged = snapshotsEqual(baseline, latest);
 
     const now = new Date();
     // Pipeline update so baseline/firstChangeAt are kept from the first edit of
@@ -76,6 +98,8 @@ export const recordProfileChange = async ({ kerberos, before, after, actor }) =>
     const pipeline = [
         {
             $set: {
+                kerberos: { $literal: kerberos },
+                status: { $literal: 'pending' },
                 name: { $literal: facultyDisplayName(after) },
                 email: { $literal: String(after.email || '') },
                 baseline: { $ifNull: ['$baseline', { $literal: baseline }] },
@@ -96,7 +120,7 @@ export const recordProfileChange = async ({ kerberos, before, after, actor }) =>
             await ProfileUpdateNotice.collection.updateOne(
                 { kerberos, status: 'pending' },
                 pipeline,
-                { upsert: true },
+                { upsert: !unchanged },
             );
             return;
         } catch (err) {
@@ -137,7 +161,14 @@ export const deliverNotice = async (notice) => {
         return 'failed';
     }
 
-    const { to, redirectedFrom } = resolveRecipient(notice.kerberos, notice.email);
+    let { to, redirectedFrom } = resolveRecipient(notice.kerberos, notice.email);
+    try {
+        to = guardRecipient(to);
+    } catch (err) {
+        await finish(notice._id, { status: 'failed', lastError: String(err.message).slice(0, 500) });
+        console.error(`[ProfileMail] ${err.message} (kerberos ${notice.kerberos})`);
+        return 'failed';
+    }
     const email = buildProfileUpdateEmail({
         name: notice.name,
         kerberos: notice.kerberos,
@@ -162,6 +193,7 @@ export const deliverNotice = async (notice) => {
             attachments: email.attachments,
             headers: { 'Auto-Submitted': 'auto-generated' },
         });
+        if (info?.rejected?.length) throw new Error(`SMTP rejected ${info.rejected.join(', ')}`);
         await finish(notice._id, { status: 'sent', sentAt: new Date(), recipient: to, messageId: info?.messageId, lastError: null });
         console.info(JSON.stringify({ event: 'profile_update_email_sent', kerberos: notice.kerberos, to, sections: sections.length }));
         return 'sent';
@@ -183,9 +215,10 @@ export const deliverNotice = async (notice) => {
 };
 
 let ticking = false;
+let stopRequested = false;
 
 export const runProfileMailTick = async () => {
-    if (ticking) return;
+    if (ticking || stopRequested) return;
     ticking = true;
     try {
         for (let i = 0; i < BATCH_PER_TICK; i++) {
@@ -207,14 +240,19 @@ export const startProfileUpdateWorker = () => {
         return () => {};
     }
     console.info(isMailProd()
-        ? '[ProfileMail] enabled: MAIL_PROD=true, sending to faculty kerberos addresses'
+        ? '[ProfileMail] enabled: MAIL_PROD=true, sending to faculty directory addresses'
         : `[ProfileMail] enabled in dev mode: all notices go to ${devRecipient()}`);
     const interval = setInterval(runProfileMailTick, POLL_MS);
     interval.unref();
     const first = setTimeout(runProfileMailTick, 10_000);
     first.unref();
-    return () => {
+    // Wait for a send that is already in flight so a restart can't leave it
+    // claimed but unfinished (the lease would otherwise resend it).
+    return async () => {
+        stopRequested = true;
         clearInterval(interval);
         clearTimeout(first);
+        const deadline = Date.now() + 20_000;
+        while (ticking && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
     };
 };
