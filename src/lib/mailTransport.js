@@ -2,11 +2,28 @@ import nodemailer from 'nodemailer';
 
 const DEV_RECIPIENT = 'ch7221511@iitd.ac.in';
 const SUPPORT_ADDRESS = 'support.rambit@iitd.ac.in';
+const IITD_SMTP = { host: 'smtp.iitd.ac.in', port: 465, secure: true };
 
 let transporter = null;
+let warnedOverride = false;
 
-export const isMailConfigured = () =>
-    Boolean(process.env.MAIL_HOST && process.env.MAIL_USER && process.env.MAIL_PASS);
+export const isMailConfigured = () => Boolean(process.env.MAIL_USER && process.env.MAIL_PASS);
+
+/** IITD SMTP is the only server in production. MAIL_HOST/MAIL_PORT may point
+ * elsewhere only outside production (e.g. a local test server). */
+export const smtpServer = () => {
+    const host = process.env.MAIL_HOST;
+    if (!host || host === IITD_SMTP.host) return IITD_SMTP;
+    if (process.env.NODE_ENV === 'production') {
+        if (!warnedOverride) {
+            console.warn(`[Mailer] ignoring MAIL_HOST=${host} in production; using ${IITD_SMTP.host}:${IITD_SMTP.port}`);
+            warnedOverride = true;
+        }
+        return IITD_SMTP;
+    }
+    const port = Number(process.env.MAIL_PORT) || 587;
+    return { host, port, secure: process.env.MAIL_SECURE ? process.env.MAIL_SECURE === 'true' : port === 465 };
+};
 
 // Only the exact string "true" sends mail to real faculty addresses.
 export const isMailProd = () => process.env.MAIL_PROD === 'true';
@@ -29,11 +46,8 @@ export const fromHeader = () =>
 
 export const getTransporter = () => {
     if (transporter) return transporter;
-    const port = Number(process.env.MAIL_PORT) || 587;
     transporter = nodemailer.createTransport({
-        host: process.env.MAIL_HOST,
-        port,
-        secure: process.env.MAIL_SECURE ? process.env.MAIL_SECURE === 'true' : port === 465,
+        ...smtpServer(),
         auth: { user: process.env.MAIL_USER, pass: process.env.MAIL_PASS },
         pool: true,
         maxConnections: 1,

@@ -11,7 +11,7 @@
 import fs from 'fs';
 import dotenv from 'dotenv';
 import {
-    closeTransporter, devRecipient, fromHeader, getTransporter, isMailConfigured, replyToAddress,
+    closeTransporter, devRecipient, fromHeader, getTransporter, isMailConfigured, replyToAddress, smtpServer,
 } from '../lib/mailTransport.js';
 import { buildProfileUpdateEmail, describeProfileChanges, sealAttachment } from '../services/profileUpdateEmail.js';
 
@@ -71,14 +71,15 @@ if (previewPath) {
 }
 
 if (!isMailConfigured()) {
-    console.error('Set MAIL_HOST, MAIL_USER and MAIL_PASS (and MAIL_PORT if not 587) first.');
+    console.error('Set MAIL_USER and MAIL_PASS first.');
     process.exit(1);
 }
 
 try {
     const transporter = getTransporter();
     await transporter.verify();
-    console.log(`SMTP login OK as ${process.env.MAIL_USER} on ${process.env.MAIL_HOST}:${process.env.MAIL_PORT || 587}`);
+    const { host, port } = smtpServer();
+    console.log(`SMTP login OK as ${process.env.MAIL_USER} on ${host}:${port}`);
     if (!args.includes('--verify')) {
         const info = await transporter.sendMail({
             from: fromHeader(),

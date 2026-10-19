@@ -8,7 +8,7 @@ import { fromHeader, getTransporter, isMailConfigured } from '../lib/mailTranspo
 const sendSuggestionEmail = async (suggestion) => {
     // Skip silently if credentials are not configured
     if (!isMailConfigured()) {
-        console.warn('[Mailer] MAIL_HOST, MAIL_USER or MAIL_PASS not set — skipping email notification.');
+        console.warn('[Mailer] MAIL_USER or MAIL_PASS not set — skipping email notification.');
         return;
     }
 

@@ -4,6 +4,7 @@ import {
     buildProfileUpdateEmail, describeActors, describeProfileChanges, snapshotProfile, snapshotsEqual,
 } from '../src/services/profileUpdateEmail.js';
 import { actorFromRequest, resolveRecipient } from '../src/services/profileUpdateNotifier.js';
+import { smtpServer } from '../src/lib/mailTransport.js';
 
 const base = {
     title: 'Prof.', firstName: 'A', lastName: 'B',
@@ -94,6 +95,28 @@ test('only MAIL_PROD=true sends to the faculty address', () => {
     } finally {
         if (saved.prod === undefined) delete process.env.MAIL_PROD; else process.env.MAIL_PROD = saved.prod;
         if (saved.dev !== undefined) process.env.MAIL_DEV_TO = saved.dev;
+    }
+});
+
+test('IITD SMTP is used unless overridden outside production', () => {
+    const saved = { host: process.env.MAIL_HOST, port: process.env.MAIL_PORT, env: process.env.NODE_ENV };
+    const restore = (k, v) => (v === undefined ? delete process.env[k] : (process.env[k] = v));
+    try {
+        delete process.env.MAIL_HOST;
+        delete process.env.MAIL_PORT;
+        assert.deepEqual(smtpServer(), { host: 'smtp.iitd.ac.in', port: 465, secure: true });
+
+        process.env.MAIL_HOST = 'smtp.gmail.com';
+        process.env.MAIL_PORT = '587';
+        process.env.NODE_ENV = 'production';
+        assert.deepEqual(smtpServer(), { host: 'smtp.iitd.ac.in', port: 465, secure: true });
+
+        process.env.NODE_ENV = 'development';
+        assert.deepEqual(smtpServer(), { host: 'smtp.gmail.com', port: 587, secure: false });
+    } finally {
+        restore('MAIL_HOST', saved.host);
+        restore('MAIL_PORT', saved.port);
+        restore('NODE_ENV', saved.env);
     }
 });
 
