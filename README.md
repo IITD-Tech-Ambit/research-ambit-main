@@ -4,19 +4,61 @@ Express.js backend for Research Ambit at IIT Delhi. It serves the faculty direct
 
 **API reference:** [Postman documentation](https://documenter.getpostman.com/view/32690520/2sB3dPTWfN)
 
+## System design
+
+This process is the Research Ambit backend for the faculty directory, CMS content, CMS users, suggestions, and the knowledge graph (Atlas). Express and one gRPC server call the same service modules.
+
+```
+                         api-gateway (Envoy)
+                        /                    \
+   Express HTTP :3002                         gRPC directory.v1 :50055
+   every worker                               lead worker; insecure creds
+                        \                    /
+                    directory, kg, content, user, suggestion services
+              MongoDB          Redis          Cloudinary
+```
+
+HTTP listens on `PORT` (default 3002). `/api` mounts `/directory`, `/kg`, `/content`, `/user`, and `/suggestions`. JSON and urlencoded bodies are limited to 50 MB. gRPC loads `protos/directory/v1/directory.proto` and registers `DirectoryService`, `KnowledgeGraphService`, `ContentService`, `UserService`, and `SuggestionService` on one listener (`GRPC_BIND_ADDRESS`, default `0.0.0.0:50055`). It starts when `GRPC_ENABLED` is not `false`, and only on the lead worker (`NODE_APP_INSTANCE` unset or `0`): the port is a single Envoy contract, and grpc-js does not share it across workers. `GRPC_ENABLED=false` leaves the process REST-only. The listener uses insecure credentials; Envoy is the mesh front.
+
+`grpc.max_receive_message_length` is 8 MB (`8 * 1024 * 1024`). That size fits one 5 MB image plus protobuf overhead. User, content, and suggestion uploads are the paths that travel as protobuf bytes, and their multer limits stay at 5 MB. On that path the bytes are written to a temp file and uploaded with the same Cloudinary helper as REST. The faculty photo route is HTTP-only, with its own 8 MB multer limit (see [Faculty self-service](#faculty-self-service-directory-profile)).
+
+### Trust
+
+`x-user-*` is caller identity only when `isFromGateway` accepts the request. With `GATEWAY_SHARED_SECRET` set, `x-gateway-secret` must match it (equal length, `crypto.timingSafeEqual`). With the secret unset, the check returns true so local development can send the headers; production startup warns in that case.
+
+Directory profile edits do not use the CMS JWT. `denyProfileEdit` returns 401 when `isFromGateway` fails. `x-user-role: superadmin` may edit any kerberos, including when `x-user-kerberos` is absent (non-GET edits are logged). Every other caller must send `x-user-kerberos` equal to the path `:kerberos`: missing is 401, a mismatch is 403.
+
+CMS login and content writes use a separate Bearer JWT. The process exits on startup unless `JWT_SECRET` is at least 32 characters. Sign and verify are pinned to HS256: login signs `{ id, email, role }` with `expiresIn: "1h"`, and verify passes `algorithms: ["HS256"]`. Express `authMiddleware` and gRPC `requireAuth` both call `verifyCmsJwt`. gRPC reads the `authorization` metadata key. CMS `User.role` is `user` or `admin`. `superadmin` is a gateway header on directory profile edits, not a CMS role.
+
+`directory.v1` has no `metricVisibility` field, and citation and h-index counts are `int32`, so a redacted `null` becomes `0` on that path. Image, visibility, and profile-extras edits are Express routes only. Metric-bearing directory reads stay on HTTP for the same reason; see [Faculty self-service](#faculty-self-service-directory-profile).
+
+### Domain areas
+
+**Directory.** Browse, search, department grouping, Scopus and Kerberos lookup, profile, research summary, and publications. A faculty member, or a superadmin, can replace the profile photo (`POST /api/directory/faculty/:kerberos/image`, multipart image, ≤8 MB). The file goes to Cloudinary folder `faculty_images` and the URL is stored as `profile_image_url`. `metric_visibility` covers `h_index`, `citations`, `papers`, and `patents` (default visible). A hidden metric is returned as `null`; the stored number is kept. Profile extras (background, qualifications, awards, custom research areas, additional emails, phone, office address, external links) are readable and writable on the same owner-or-superadmin check. Hidden section text stays in MongoDB and is omitted from the public profile. Those writes delete the directory Redis prefix.
+
+**Publications.** Publication lists and research summaries read `ResearchMetaDataScopus` (collection `researchmetadatascopus`), matched on Scopus author id or kerberos. Faculty with no Scopus id can fall back to Google Scholar records written into that same collection. `patents` is a visibility flag on the faculty document. This service has no patents collection or patents list endpoint.
+
+**CMS.** `Content` documents (markdown body, status `pending` / `archived` / `online`) with hero images in Cloudinary folder `posts`. Likes and comments live on `Analytics`. Create, update, delete, and status changes require a CMS JWT (`admin` or `user`). Hero uploads are ≤5 MB.
+
+**Users.** CMS register, login, edit, and delete. Profile images go to Cloudinary folder `users` (≤5 MB). Register and delete require role `admin`.
+
+**Suggestions.** Feedback submissions, with an optional screenshot (JPEG, PNG, GIF, or WebP, ≤5 MB) stored in Cloudinary folder `research-ambit/suggestions`.
+
+**Knowledge graph.** Atlas octree tiles, per-faculty graphs, topic explorer, and atlas search are read from MongoDB. Small JSON responses are cached in Redis. Hot binary tiles sit in an in-process LRU (`KG_TILE_LRU_MAX`, default 512). The live build is the `atlas_meta` active pointer, cached for about 30 seconds (`KG_ACTIVE_TTL_MS`).
+
+### Data stores
+
+This process connects to MongoDB, Redis, and Cloudinary. Hybrid search is the sibling `/search/*` service. Publication documents carry `open_search_id` (and a kerberos stamp) written outside this process; this backend does not query OpenSearch.
+
+| Store | What it holds |
+|-------|----------------|
+| MongoDB (`MONGODB_URI`) | Faculty (`faculties`) and departments; Scopus and Scholar publication documents (`researchmetadatascopus`); CMS users, content, and like/comment analytics; suggestions; Atlas collections `atlas_tiles`, `atlas_meta`, `atlas_points`, `kg_faculty_graphs`, `kg_explore`, `kg_indices`; `profile_update_notices` (queued profile-edit notices) |
+| Redis (`REDIS_URL`, optional) | Fail-open cache. Directory responses use prefix `dir:v3` (TTL `FACULTY_CACHE_TTL_S`, default 10800 s; search keys 300 s). KG JSON uses `KG_CACHE_TTL_S` (default 10800 s). A down Redis skips the cache. |
+| Cloudinary | Faculty photos, CMS user images, content hero images, suggestion screenshots. MongoDB stores the URLs. |
+
 ## Role in the Research Ambit stack
 
-Research Ambit is a multi-service platform for discovering IIT Delhi research. This repo is the **primary backend** (`/api/*`) behind the public SPA.
-
-```
-tech-ambit-explorer (React)     :8080
-        │
-        ├── /api/*          → research-ambit-main (this repo) :3002
-        ├── /search/*       → opensearch (hybrid search)       :3000
-        └── /chat-api/*     → chatbot-agent (RAG chatbot)      :3003
-
-Shared data stores: MongoDB · Redis · OpenSearch
-```
+Research Ambit is a multi-service platform for discovering IIT Delhi research. This repo is the directory, CMS, and Atlas backend. The browser does not call it directly. The API gateway proxies the faculty self-edit routes and the directory reads that must keep metric visibility over HTTP, and transcodes the rest of `/api/directory`, `/api/kg`, `/api/content`, `/api/user`, and `/api/suggestions` to `directory.v1` through Envoy. Search and chat are separate services.
 
 | Module | Route prefix | Purpose |
 |--------|--------------|---------|
@@ -65,19 +107,21 @@ Old builds are garbage-collected automatically (keeps the current + previous ver
 - **Cache:** Redis for directory and KG API responses (`REDIS_URL`, TTL env vars)
 - **Media:** Cloudinary for profile and hero images
 - **Observability:** Prometheus metrics per PM2 worker (`METRICS_PORT_BASE`, default 9111+)
-- **Deployment:** Docker + PM2 cluster (`Dockerfile`, `ecosystem.config.cjs`); nginx routes `/api/` to port 3002 in the full stack
+- **Deployment:** Docker + PM2 cluster (`Dockerfile`, `ecosystem.config.cjs`). Coolify runs the container on the VM network; the API gateway is the public ingress.
 
 ## Faculty self-service (Directory profile)
 
-Logged-in faculty can edit **their own** Directory profile. All routes are
-owner-enforced: the gateway verifies the `ra_session` and injects a trusted
-`x-user-kerberos`, and the controller requires it to equal the path `:kerberos`.
+Logged-in faculty can edit **their own** Directory profile. A gateway
+`x-user-role` of `superadmin` can edit any profile. These routes accept
+`x-user-*` only when `isFromGateway` passes (`x-gateway-secret` matches
+`GATEWAY_SHARED_SECRET` when that secret is set). A non-superadmin caller
+must also have `x-user-kerberos` equal to the path `:kerberos`.
 
 | Route | Purpose |
 |---|---|
-| `POST /api/directory/faculty/:kerberos/image` | Replace the profile photo (multipart, ≤5 MB, image only). Uploads to Cloudinary (`faculty_images`), sets `profile_image_url`. |
+| `POST /api/directory/faculty/:kerberos/image` | Replace the profile photo (multipart, ≤8 MB, image only). Uploads to Cloudinary (`faculty_images`), sets `profile_image_url`. |
 | `PATCH /api/directory/faculty/:kerberos/visibility` | Show/hide the four metrics — `h_index`, `citations`, `papers`, `patents`. JSON body of booleans. |
-| `GET /api/directory/faculty/:kerberos/profile-extras` | Owner-only. Returns the **full** Background / Qualifications (incl. hidden content) for the edit view. |
+| `GET /api/directory/faculty/:kerberos/profile-extras` | Owner or superadmin. Returns the **full** Background / Qualifications (incl. hidden content) for the edit view. |
 | `PATCH /api/directory/faculty/:kerberos/profile-extras` | Save Background / Qualifications + their visibility. Body: `{ background, qualifications[], background_visible, qualifications_visible }`. |
 
 **Background & Qualifications.** Two optional, **profile-only** sections
@@ -135,7 +179,7 @@ The server listens on **port 3002** by default (`PORT`).
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `MONGO_URI` | Yes | MongoDB connection string |
+| `MONGODB_URI` | Yes | MongoDB connection string (Mongoose). Atlas publish commands in [Atlas data](#atlas-data-mongodb) pass `MONGO_URI` to the Python pipeline. |
 | `JWT_SECRET` | Yes | Secret for signing auth tokens |
 | `CLOUDINARY_*` | Yes | Cloudinary cloud name, API key, and secret |
 | `REDIS_URL` | No | Redis URL for response caching |
