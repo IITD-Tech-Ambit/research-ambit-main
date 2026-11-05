@@ -21,8 +21,13 @@ module.exports = {
     env: {
       NODE_ENV: 'production'
     },
-    error_file: '/dev/stderr',
-    out_file: '/dev/stdout',
+    // PM2 7.1 cluster mode pipes worker stdout to the daemon, then
+    // pm2-runtime prints that to the container logs. Opening /dev/stdout
+    // (or /dev/stderr) from the worker throws ENXIO on Coolify and the
+    // process crash-loops before /health can succeed. /dev/null skips
+    // that open; logs still reach `docker logs` through pm2-runtime.
+    error_file: '/dev/null',
+    out_file: '/dev/null',
     merge_logs: true,
     log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
     listen_timeout: 10000,
