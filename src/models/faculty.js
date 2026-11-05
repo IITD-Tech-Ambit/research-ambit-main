@@ -1,5 +1,10 @@
 import mongoose from 'mongoose'
 
+const maxItems = (limit, label) => ({
+    validator: (value) => !Array.isArray(value) || value.length <= limit,
+    message: `${label} cannot contain more than ${limit} items`,
+});
+
 const facultySchema = new mongoose.Schema({
     expert_id:{
         type:String,
@@ -67,10 +72,12 @@ const facultySchema = new mongoose.Schema({
     // >=1 qualification) is enforced on the write ONLY when the section is shown.
     background:{
         type:String,
+        maxlength:5000,
     },
     qualifications:{
-        type:[String],
+        type:[{ type:String, maxlength:300 }],
         default:[],
+        validate:maxItems(20, 'Qualifications'),
     },
     background_visible:{
         type:Boolean,
@@ -82,8 +89,9 @@ const facultySchema = new mongoose.Schema({
     },
     // Awards & Honors — faculty-managed, same show/hide model as qualifications.
     awards:{
-        type:[String],
+        type:[{ type:String, maxlength:300 }],
         default:[],
+        validate:maxItems(20, 'Awards'),
     },
     awards_visible:{
         type:Boolean,
@@ -94,18 +102,31 @@ const facultySchema = new mongoose.Schema({
     // don't map to a taxonomy domain slug. The faculty can add/remove only
     // these — never the computed dominant_domains.
     custom_research_areas:{
-        type:[String],
+        type:[{ type:String, maxlength:120 }],
         default:[],
+        validate:maxItems(20, 'Custom research areas'),
+    },
+    // Slugs of auto-computed dominant_domains the faculty chose to hide from
+    // their public profile. Stored apart from dominant_domains on purpose:
+    // that array is rewritten wholesale by SEO-Backend's
+    // populateFacultyDomains.js, which would otherwise erase the choice. The
+    // domain itself is kept, so unhiding restores it (and its link) at once.
+    hidden_research_area_slugs:{
+        type:[{ type:String, maxlength:120 }],
+        default:[],
+        validate:maxItems(20, 'Hidden research areas'),
     },
     // Extra contact emails the faculty chooses to list. The primary `email`
     // (kerberos) is the DB key and is never stored/removed here.
     additional_emails:{
-        type:[String],
+        type:[{ type:String, maxlength:254 }],
         default:[],
+        validate:maxItems(10, 'Additional emails'),
     },
     // Contact number + office address, each independently show/hide-able.
     phone:{
         type:String,
+        maxlength:40,
     },
     phone_visible:{
         type:Boolean,
@@ -113,6 +134,7 @@ const facultySchema = new mongoose.Schema({
     },
     office_address:{
         type:String,
+        maxlength:300,
     },
     office_address_visible:{
         type:Boolean,
@@ -123,11 +145,12 @@ const facultySchema = new mongoose.Schema({
     // Scopus / Google Scholar links. Content is kept even while hidden.
     external_links:{
         type:[{
-            label:{ type:String, default:"" },
-            url:{ type:String, required:true },
+            label:{ type:String, default:"", maxlength:60 },
+            url:{ type:String, required:true, maxlength:500 },
             _id:false,
         }],
         default:[],
+        validate:maxItems(10, 'External links'),
     },
     external_links_visible:{
         type:Boolean,

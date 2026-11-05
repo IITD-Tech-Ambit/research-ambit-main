@@ -57,6 +57,7 @@ export function updateFacultyProfileExtrasByKerberos(kerberos, fields) {
     if (Array.isArray(fields.awards)) set.awards = fields.awards;
     if (typeof fields.awards_visible === "boolean") set.awards_visible = fields.awards_visible;
     if (Array.isArray(fields.custom_research_areas)) set.custom_research_areas = fields.custom_research_areas;
+    if (Array.isArray(fields.hidden_research_area_slugs)) set.hidden_research_area_slugs = fields.hidden_research_area_slugs;
     if (Array.isArray(fields.additional_emails)) set.additional_emails = fields.additional_emails;
     if (typeof fields.phone === "string") set.phone = fields.phone;
     if (typeof fields.phone_visible === "boolean") set.phone_visible = fields.phone_visible;
@@ -65,10 +66,12 @@ export function updateFacultyProfileExtrasByKerberos(kerberos, fields) {
     if (Array.isArray(fields.external_links)) set.external_links = fields.external_links;
     if (typeof fields.external_links_visible === "boolean") set.external_links_visible = fields.external_links_visible;
     if (Object.keys(set).length === 0) return Promise.resolve(null);
+    // Keep the schema limits as a second line of defence if controller
+    // validation is ever changed or this repository is called elsewhere.
     return Faculty.findOneAndUpdate(
         { email: new RegExp("^" + escaped + "@", "i") },
         { $set: set },
-        { new: true },
+        { new: true, runValidators: true },
     ).lean();
 }
 

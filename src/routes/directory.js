@@ -4,11 +4,13 @@ import directory from "../controllers/directoryController.js";
 const router = e.Router();
 
 // Profile-image uploads land in a temp dir; cloudinary upload + unlink happen in
-// the controller. Cap at 8 MB and accept images only.
+// the controller. Mirror the photo dialog's 8 MB and JPG/PNG/WebP policy on
+// the server so a direct request cannot bypass the browser checks.
+const PROFILE_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 const uploadImage = multer({
     dest: "/tmp/",
     limits: { fileSize: 8 * 1024 * 1024 },
-    fileFilter: (_req, file, cb) => cb(null, /^image\//.test(file.mimetype)),
+    fileFilter: (_req, file, cb) => cb(null, PROFILE_IMAGE_TYPES.has(file.mimetype)),
 });
 
 router.get("/", directory.getAllFaculties);

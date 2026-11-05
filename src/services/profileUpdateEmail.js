@@ -13,6 +13,7 @@ const SECTIONS = [
     { key: 'qualifications', title: 'Qualifications', type: 'list', visibleKey: 'qualifications_visible' },
     { key: 'awards', title: 'Awards & Honors', type: 'list', visibleKey: 'awards_visible' },
     { key: 'custom_research_areas', title: 'Research areas', type: 'list' },
+    { key: 'hidden_research_areas', title: 'Auto-assigned research areas', type: 'hiddenList' },
     { key: 'additional_emails', title: 'Additional email addresses', type: 'list' },
     { key: 'phone', title: 'Contact number', type: 'value', visibleKey: 'phone_visible' },
     { key: 'office_address', title: 'Office address', type: 'value', visibleKey: 'office_address_visible' },
@@ -26,6 +27,17 @@ const strList = (value) => (Array.isArray(value) ? value.map((v) => String(v ?? 
 export const facultyDisplayName = (doc = {}) =>
     [doc.title, doc.firstName, doc.lastName].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
 
+// Names (not slugs) of the auto-assigned research areas the faculty has hidden.
+// Already-snapshotted input (describeProfileChanges re-snapshots stored ones)
+// carries the names directly.
+const hiddenResearchAreaNames = (doc) => {
+    if (Array.isArray(doc.hidden_research_areas)) return strList(doc.hidden_research_areas);
+    const hidden = new Set(strList(doc.hidden_research_area_slugs));
+    return (Array.isArray(doc.dominant_domains) ? doc.dominant_domains : [])
+        .filter((d) => d?.name && hidden.has(d.slug))
+        .map((d) => String(d.name));
+};
+
 export const snapshotProfile = (doc = {}) => {
     const vis = doc.metric_visibility || {};
     return {
@@ -38,6 +50,7 @@ export const snapshotProfile = (doc = {}) => {
         awards: strList(doc.awards),
         awards_visible: doc.awards_visible === true,
         custom_research_areas: strList(doc.custom_research_areas),
+        hidden_research_areas: hiddenResearchAreaNames(doc),
         additional_emails: strList(doc.additional_emails),
         phone: doc.phone || '',
         phone_visible: doc.phone_visible === true,
@@ -115,6 +128,11 @@ export const describeProfileChanges = (baseline = {}, latest = {}) => {
             const { added, removed } = listDiff(before, after);
             added.forEach((x) => changes.push({ type: 'added', text: x }));
             removed.forEach((x) => changes.push({ type: 'removed', text: x }));
+        } else if (s.type === 'hiddenList') {
+            // The list holds HIDDEN areas: newly listed = now hidden, dropped = shown again.
+            const { added, removed } = listDiff(before, after);
+            added.forEach((x) => changes.push({ type: 'hidden', text: `${x} is now hidden from your public profile` }));
+            removed.forEach((x) => changes.push({ type: 'shown', text: `${x} is now shown on your public profile` }));
         } else if (s.type === 'value' && before !== after) {
             if (!before) changes.push({ type: 'added', text: after });
             else if (!after) changes.push({ type: 'removed', text: before });

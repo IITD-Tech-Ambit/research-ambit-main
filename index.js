@@ -37,6 +37,19 @@ app.use(morgan(process.env.NODE_ENV === "production" ? "combined" : "dev", {
 
 app.use(cors());
 app.use(metricsMiddleware);
+
+// Profile extras are small JSON documents (well under 256 KB even at every
+// field limit). Parse this route with a narrow cap before the legacy 50 MB
+// parser used by other endpoints, without changing those endpoints' behavior.
+const profileExtrasJson = express.json({ limit: "256kb" });
+app.use("/api/directory/faculty/:kerberos/profile-extras", (req, res, next) => {
+  if (req.method !== "PATCH") return next();
+  if (!req.is("application/json")) {
+    return res.status(415).json({ success: false, message: "Profile updates must be sent as JSON." });
+  }
+  return profileExtrasJson(req, res, next);
+});
+
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 app.use(express.static("public"));
