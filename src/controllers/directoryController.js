@@ -7,6 +7,7 @@ import { uploadToCloudinary } from "../lib/cloudinary.js";
 import { cacheDelByPrefix } from "../lib/cache.js";
 import { DIR_CACHE_PREFIX } from "../services/directoryCache.js";
 import { isFromGateway } from "../lib/gatewayIdentity.js";
+import { autoResearchAreasWithState } from "../domain/facultyDirectory.js";
 import { actorFromRequest, recordProfileChange } from "../services/profileUpdateNotifier.js";
 
 let directory = {};
@@ -192,6 +193,13 @@ directory.updateFacultyVisibility = asyncErrorHandler(async (req, res) => {
 });
 
 const BACKGROUND_MIN_CHARS = 100;
+// Upper bounds so one profile can't bloat its Mongo document (read on hot
+// directory paths with .lean()) or the Redis directory cache. Mirrored by the
+// faculty schema (maxlength) and the frontend inputs (maxLength).
+const BACKGROUND_MAX_CHARS = 5000;
+const EMAIL_MAX_CHARS = 254; // RFC 5321 address length ceiling
+const QUALIFICATIONS_MAX_ITEMS = 20;
+const AWARDS_MAX_ITEMS = 20;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 // Trim, drop empties, dedupe (case-insensitive), and cap each string's length
@@ -260,6 +268,9 @@ const profileExtrasPayload = (doc) => ({
     awards: Array.isArray(doc.awards) ? doc.awards : [],
     awardsVisible: doc.awards_visible === true,
     customResearchAreas: Array.isArray(doc.custom_research_areas) ? doc.custom_research_areas : [],
+    // Auto-computed areas with the owner's hide flag, so the edit page can show a
+    // switch per area. (The public read omits hidden ones entirely.)
+    autoResearchAreas: autoResearchAreasWithState(doc),
     additionalEmails: Array.isArray(doc.additional_emails) ? doc.additional_emails : [],
     phone: doc.phone || "",
     phoneVisible: doc.phone_visible === true,
@@ -315,15 +326,29 @@ directory.updateFacultyProfileExtras = asyncErrorHandler(async (req, res) => {
     const primaryEmail = String(existing.email || "").toLowerCase();
 
     const body = req.body || {};
-    const background = typeof body.background === "string" ? body.background : "";
-    const qualifications = cleanStringList(body.qualifications);
+    const background = typeof body.background === "string" ? body.background.slice(0, BACKGROUND_MAX_CHARS) : "";
+    const qualifications = cleanStringList(body.qualifications, { maxItems: QUALIFICATIONS_MAX_ITEMS });
     const backgroundVisible = body.background_visible === true;
     const qualificationsVisible = body.qualifications_visible === true;
 
-    const awards = cleanStringList(body.awards);
+    const awards = cleanStringList(body.awards, { maxItems: AWARDS_MAX_ITEMS });
     const awardsVisible = body.awards_visible === true;
 
     const customResearchAreas = cleanStringList(body.custom_research_areas, { maxItems: 20, maxLen: 120 });
+
+    // Auto-assigned areas to hide. Only slugs that are currently among this
+    // faculty's computed areas are kept (anything else is ignored), so the list
+    // can't be used to store arbitrary text. Left undefined when the client
+    // doesn't send the field, so an older page can never unhide anything.
+    let hiddenResearchAreaSlugs;
+    if (Array.isArray(body.hidden_research_area_slugs)) {
+        const known = new Set(autoResearchAreasWithState(existing).map((a) => a.slug));
+        hiddenResearchAreaSlugs = [...new Set(
+            body.hidden_research_area_slugs
+                .map((s) => String(s ?? "").trim())
+                .filter((s) => known.has(s)),
+        )];
+    }
 
     // Additional emails: valid, deduped, and never the primary kerberos email.
     const additionalEmails = [];
@@ -331,7 +356,7 @@ directory.updateFacultyProfileExtras = asyncErrorHandler(async (req, res) => {
         const seen = new Set([primaryEmail]);
         for (const raw of body.additional_emails) {
             const e = String(raw ?? "").trim();
-            if (!e || !EMAIL_RE.test(e) || seen.has(e.toLowerCase())) continue;
+            if (!e || e.length > EMAIL_MAX_CHARS || !EMAIL_RE.test(e) || seen.has(e.toLowerCase())) continue;
             seen.add(e.toLowerCase());
             additionalEmails.push(e);
             if (additionalEmails.length >= 10) break;
@@ -395,6 +420,7 @@ directory.updateFacultyProfileExtras = asyncErrorHandler(async (req, res) => {
         awards,
         awards_visible: awardsVisible,
         custom_research_areas: customResearchAreas,
+        hidden_research_area_slugs: hiddenResearchAreaSlugs,
         additional_emails: additionalEmails,
         phone,
         phone_visible: phoneVisible,

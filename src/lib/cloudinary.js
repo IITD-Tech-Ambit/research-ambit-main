@@ -1,4 +1,5 @@
 import { v2 as cloudinary } from 'cloudinary';
+import createHttpsProxyAgent from 'https-proxy-agent';
 import fs from 'fs';
 import dotenv from 'dotenv';
 
@@ -10,19 +11,27 @@ cloudinary.config({
     api_secret: process.env.CLOUDINARY_API_SECRET
 });
 
+function cloudinaryAgent() {
+    const proxy = process.env.HTTPS_PROXY || process.env.HTTP_PROXY;
+    return proxy ? createHttpsProxyAgent(proxy) : undefined;
+}
+
 const uploadToCloudinary = async (localFilePath, folder) => {
     try {
         if (!localFilePath) return null;
 
+        const agent = cloudinaryAgent();
         const response = await cloudinary.uploader.upload(localFilePath, {
             resource_type: "auto",
-            folder: folder
+            folder: folder,
+            ...(agent ? { agent } : {})
         });
 
         fs.unlinkSync(localFilePath);
         return response.secure_url || response.url;
     } catch (error) {
-        fs.unlinkSync(localFilePath);
+        console.error("Cloudinary upload failed:", error?.message || error);
+        try { fs.unlinkSync(localFilePath); } catch {}
         return null;
     }
 }
@@ -31,7 +40,6 @@ const deleteFromCloudinary = async (imageUrl) => {
     try {
         if (!imageUrl) return null;
 
-        // URL format: https://res.cloudinary.com/cloud_name/image/upload/v12345678/folder/filename.extension
         const regex = /\/upload\/(?:v\d+\/)?(.+)\.[^.]+$/;
         const match = imageUrl.match(regex);
 
@@ -41,7 +49,8 @@ const deleteFromCloudinary = async (imageUrl) => {
         }
 
         const publicId = match[1];
-        const response = await cloudinary.uploader.destroy(publicId);
+        const agent = cloudinaryAgent();
+        const response = await cloudinary.uploader.destroy(publicId, agent ? { agent } : undefined);
         return response;
     } catch (error) {
         console.log("Error deleting from cloudinary:", error);

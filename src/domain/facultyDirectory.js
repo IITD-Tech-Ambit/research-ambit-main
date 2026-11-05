@@ -148,9 +148,39 @@ export const buildSubjectAreaMap = async (kerberosIds = [], expertIdToKerberos =
     return subjectMap;
 };
 
+/**
+ * Auto-computed domains the faculty chose to show (hidden ones removed). This is
+ * the only place hiding is applied, so every public surface that formats a
+ * faculty through here — profile, directory cards, search, gRPC — agrees.
+ * Hiding is keyed by slug and never touches Faculty.dominant_domains itself.
+ */
+export const visibleDominantDomains = (facultyDoc) => {
+    const hidden = new Set(
+        (Array.isArray(facultyDoc?.hidden_research_area_slugs) ? facultyDoc.hidden_research_area_slugs : [])
+            .map((slug) => String(slug)),
+    );
+    return (Array.isArray(facultyDoc?.dominant_domains) ? facultyDoc.dominant_domains : [])
+        .filter((d) => d?.name && d?.slug && !hidden.has(d.slug));
+};
+
+/**
+ * The owner's full view of the auto-computed domains, hidden ones included and
+ * flagged, so the edit page can offer a show/hide switch for each. Order follows
+ * dominant_domains (same order as the public list).
+ */
+export const autoResearchAreasWithState = (facultyDoc) => {
+    const hidden = new Set(
+        (Array.isArray(facultyDoc?.hidden_research_area_slugs) ? facultyDoc.hidden_research_area_slugs : [])
+            .map((slug) => String(slug)),
+    );
+    return (Array.isArray(facultyDoc?.dominant_domains) ? facultyDoc.dominant_domains : [])
+        .filter((d) => d?.name && d?.slug)
+        .map((d) => ({ name: d.name, slug: d.slug, hidden: hidden.has(d.slug) }));
+};
+
 export const mergeResearchAreas = (facultyDoc, subjectMap) => {
     const buckets = [
-        (facultyDoc.dominant_domains || []).map((d) => d?.name).filter(Boolean),
+        visibleDominantDomains(facultyDoc).map((d) => d.name),
         facultyDoc.expertise,
         facultyDoc.brief_expertise,
         facultyDoc.subjects,
@@ -181,8 +211,7 @@ export const mergeResearchAreas = (facultyDoc, subjectMap) => {
  * section renders, each one clickable through to its /research-areas?domain=<slug> page.
  */
 export const formatDominantDomains = (facultyDoc) =>
-    (facultyDoc?.dominant_domains || [])
-        .filter((d) => d?.name && d?.slug)
+    visibleDominantDomains(facultyDoc)
         .map((d) => ({ name: d.name, slug: d.slug, paperCount: d.paper_count ?? 0 }));
 
 export const formatDirectoryFaculty = (facultyDoc, subjectMap, overrides = {}) => {
@@ -371,6 +400,7 @@ export const facultyCardProjectFields = {
     subjects: 1,
     wos_subjects: 1,
     dominant_domains: 1,
+    hidden_research_area_slugs: 1,
     profile_image_url: 1,
     metric_visibility: 1,
     designation: 1,
@@ -392,6 +422,7 @@ export const facultyCardPushFields = {
     subjects: "$subjects",
     wos_subjects: "$wos_subjects",
     dominant_domains: "$dominant_domains",
+    hidden_research_area_slugs: "$hidden_research_area_slugs",
     profile_image_url: "$profile_image_url",
     metric_visibility: "$metric_visibility",
     designation: "$designation"
